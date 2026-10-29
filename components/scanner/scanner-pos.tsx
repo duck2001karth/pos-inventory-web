@@ -4,25 +4,28 @@
 import { useEffect, useRef, useState } from 'react';
 import type { IScannerControls } from '@zxing/browser';
 
-type ScannerPosProps = {
-  onScan: (value: string) => void;
+type Props = {
+  onScan: (code: string) => void;
   label?: string;
 };
 
 export default function ScannerPos({
   onScan,
   label = 'código',
-}: ScannerPosProps) {
+}: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const controlsRef = useRef<IScannerControls | null>(null);
+  const onScanRef = useRef(onScan);
+
   const startingRef = useRef(false);
   const detectedRef = useRef(false);
-  const onScanRef = useRef(onScan);
+  const mountedRef = useRef(true);
 
   const [active, setActive] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [lastCode, setLastCode] = useState('');
+  const [cameraInfo, setCameraInfo] = useState('');
 
   useEffect(() => {
     onScanRef.current = onScan;
@@ -32,29 +35,88 @@ export default function ScannerPos({
     controlsRef.current?.stop();
     controlsRef.current = null;
 
-    setActive(false);
-    setLoading(false);
+    streamRef.current?.getTracks().forEach((track) => {
+      track.stop();
+    });
+
+    streamRef.current = null;
+
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.srcObject = null;
+    }
+
+    if (mountedRef.current) {
+      setActive(false);
+      setLoading(false);
+    }
   }
 
   async function startCamera() {
-    if (startingRef.current || controlsRef.current) return;
+    if (startingRef.current || streamRef.current) return;
 
     startingRef.current = true;
     detectedRef.current = false;
-
-    setError('');
-    setLastCode('');
     setLoading(true);
     setActive(true);
+    setError('');
+    setCameraInfo('');
 
     try {
       if (!window.isSecureContext) {
-        throw new Error('Se necesita una conexión HTTPS.');
+        throw new Error('La cámara necesita HTTPS.');
       }
 
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error(
-          'El navegador no permite utilizar la cámara.',
+          'Este navegador no admite acceso a la cámara.',
+        );
+      }
+
+      // Solicitar la cámara antes de cargar ZXing.
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+      });
+
+      if (!mountedRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      streamRef.current = stream;
+
+      const video = videoRef.current;
+
+      if (!video) {
+        throw new Error('No se encontró el visor de video.');
+      }
+
+      // Importante para Safari en iPhone.
+      video.muted = true;
+      video.autoplay = true;
+      video.playsInline = true;
+      video.srcObject = stream;
+
+      await video.play();
+
+      const videoTrack = stream.getVideoTracks()[0];
+
+      if (!videoTrack || videoTrack.readyState !== 'live') {
+        throw new Error('La cámara no está transmitiendo video.');
+      }
+
+      const settings = videoTrack.getSettings();
+
+      if (mountedRef.current) {
+        setCameraInfo(
+          `Cámara activa: ${settings.width ?? '?'} × ${
+            settings.height ?? '?'
+          }`,
         );
       }
 
@@ -65,6 +127,7 @@ export default function ScannerPos({
         await import('@zxing/library');
 
       const hints = new Map();
+
       hints.set(DecodeHintType.POSSIBLE_FORMATS, [
         BarcodeFormat.CODE_128,
         BarcodeFormat.CODE_39,
@@ -74,26 +137,12 @@ export default function ScannerPos({
 
       hints.set(DecodeHintType.TRY_HARDER, true);
 
-      const reader = new BrowserMultiFormatOneDReader(
-        hints,
-        { delayBetweenScanAttempts: 120 },
-      );
+      const reader = new BrowserMultiFormatOneDReader(hints);
 
-      if (!videoRef.current) {
-        throw new Error('No se encontró el elemento de video.');
-      }
-
-      const controls = await reader.decodeFromConstraints(
-        {
-          audio: false,
-          video: {
-            facingMode: { ideal: 'environment' },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
-        },
-        videoRef.current,
-        (result, _error, scannerControls) => {
+      // La cámara ya está abierta: ZXing solo lee el video.
+      const controls = await reader.decodeFromVideoElement(
+        video,
+        (result) => {
           if (!result || detectedRef.current) return;
 
           const code = result.getText().trim();
@@ -101,41 +150,48 @@ export default function ScannerPos({
           if (!code) return;
 
           detectedRef.current = true;
-          setLastCode(code);
-
-          scannerControls.stop();
-          controlsRef.current = null;
-
-          setActive(false);
+          stopCamera();
           onScanRef.current(code);
         },
       );
 
-      if (detectedRef.current) {
+      if (
+        !mountedRef.current ||
+        detectedRef.current ||
+        !streamRef.current
+      ) {
         controls.stop();
       } else {
         controlsRef.current = controls;
       }
     } catch (err) {
+      const message =
+        err instanceof Error
+          ? `${err.name}: ${err.message}`
+          : String(err);
+
       console.error('Error de cámara:', err);
 
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'No se pudo iniciar el escáner.',
-      );
+      if (mountedRef.current) {
+        setError(message);
+      }
 
-      setActive(false);
+      stopCamera();
     } finally {
       startingRef.current = false;
-      setLoading(false);
+
+      if (mountedRef.current) {
+        setLoading(false);
+      }
     }
   }
 
   useEffect(() => {
+    mountedRef.current = true;
+
     return () => {
-      controlsRef.current?.stop();
-      controlsRef.current = null;
+      mountedRef.current = false;
+      stopCamera();
     };
   }, []);
 
@@ -154,7 +210,7 @@ export default function ScannerPos({
         className="w-full rounded-xl bg-blue-600 px-4 py-3 font-semibold text-white disabled:opacity-50"
       >
         {loading
-          ? 'Iniciando cámara...'
+          ? 'Abriendo cámara...'
           : active
             ? 'Cerrar cámara'
             : `Escanear ${label}`}
@@ -162,7 +218,7 @@ export default function ScannerPos({
 
       <div
         className={`relative overflow-hidden rounded-xl bg-black ${
-          active ? 'block' : 'hidden'
+          active || loading ? 'block' : 'hidden'
         }`}
       >
         <video
@@ -170,30 +226,32 @@ export default function ScannerPos({
           autoPlay
           muted
           playsInline
-          className="aspect-[4/3] w-full object-cover"
+          className="block aspect-[4/3] w-full object-contain"
         />
 
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <div className="h-24 w-[90%] rounded-lg border-4 border-white shadow-lg" />
+          <div className="h-24 w-[90%] rounded-lg border-4 border-white" />
         </div>
       </div>
 
       {active && (
         <p className="text-center text-sm text-slate-600">
-          Centra únicamente las barras de {label}.
-          Mantén el teléfono firme mientras enfoca.
+          Enfoca únicamente las barras de {label}.
         </p>
       )}
 
-      {lastCode && (
-        <p role="status" className="break-all rounded-lg bg-green-50 p-3 text-sm text-green-800">
-          Código detectado: {lastCode}
+      {cameraInfo && active && (
+        <p className="text-center text-xs text-green-700">
+          {cameraInfo}
         </p>
       )}
 
       {error && (
-        <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
-          {error}
+        <p
+          role="alert"
+          className="rounded-lg bg-red-50 p-3 text-sm text-red-700"
+        >
+          Error de cámara: {error}
         </p>
       )}
     </section>
