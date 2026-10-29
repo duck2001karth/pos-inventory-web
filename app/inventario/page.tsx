@@ -1,6 +1,6 @@
 
 import { Suspense } from 'react';
-import InventarioContent from './inventario-content';
+import InventarioContent from '../../components/inventory/inventario-content';
 
 export default function InventarioPage() {
   return (
