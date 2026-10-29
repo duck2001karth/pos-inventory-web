@@ -1,7 +1,8 @@
 
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import type { Html5Qrcode } from 'html5-qrcode';
 
 type ScannerPosProps = {
   onScan: (code: string) => void;
@@ -10,115 +11,195 @@ type ScannerPosProps = {
 export default function ScannerPos({
   onScan,
 }: ScannerPosProps) {
-  const [active, setActive] = useState(false);
-  const [error, setError] = useState('');
+  const id = useId().replace(/:/g, '');
+  const readerId = `pos-reader-${id}`;
+
+  const scannerRef = useRef<Html5Qrcode | null>(null);
+  const busyRef = useRef(false);
   const onScanRef = useRef(onScan);
+
+  const [active, setActive] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     onScanRef.current = onScan;
   }, [onScan]);
 
-  useEffect(() => {
-    if (!active) return;
+  async function stopCamera() {
+    const scanner = scannerRef.current;
 
-    let cancelled = false;
-    let scanner: import('html5-qrcode').Html5QrcodeScanner
-      | undefined;
-
-    async function startScanner() {
-      try {
-        const {
-          Html5QrcodeScanner,
-          Html5QrcodeSupportedFormats,
-        } = await import('html5-qrcode');
-
-        if (cancelled) return;
-
-        scanner = new Html5QrcodeScanner(
-          'pos-reader',
-          {
-            fps: 10,
-            qrbox: { width: 220, height: 160 },
-            formatsToSupport: [
-              Html5QrcodeSupportedFormats.QR_CODE,
-              Html5QrcodeSupportedFormats.CODE_128,
-              Html5QrcodeSupportedFormats.CODE_39,
-              Html5QrcodeSupportedFormats.EAN_13,
-            ],
-          },
-          false,
-        );
-
-        scanner.render(
-          (decodedText) => {
-            if (cancelled) return;
-
-            const code = decodedText.trim();
-
-            if (!code) return;
-
-            cancelled = true;
-            onScanRef.current(code);
-            setActive(false);
-          },
-          () => {
-            // No mostramos errores por cada fotograma
-            // en el que no se detecte un código.
-          },
-        );
-      } catch {
-        if (!cancelled) {
-          setError('No se pudo iniciar el escáner.');
-          setActive(false);
-        }
-      }
+    if (!scanner) {
+      setActive(false);
+      return;
     }
 
-    void startScanner();
+    scannerRef.current = null;
 
+    try {
+      if (scanner.isScanning) {
+        await scanner.stop();
+      }
+
+      scanner.clear();
+    } catch (err) {
+      console.error('Error al cerrar cámara:', err);
+    } finally {
+      setActive(false);
+    }
+  }
+
+  async function startCamera() {
+    if (busyRef.current || scannerRef.current) return;
+
+    busyRef.current = true;
+    setLoading(true);
+    setError('');
+
+    try {
+      if (!window.isSecureContext) {
+        throw new Error(
+          'La página debe abrirse mediante HTTPS.',
+        );
+      }
+
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error(
+          'Este navegador no permite acceder a la cámara.',
+        );
+      }
+
+      const {
+        Html5Qrcode,
+        Html5QrcodeSupportedFormats,
+      } = await import('html5-qrcode');
+
+      const scanner = new Html5Qrcode(
+        readerId,
+        {
+          formatsToSupport: [
+            Html5QrcodeSupportedFormats.CODE_128,
+            Html5QrcodeSupportedFormats.CODE_39,
+            Html5QrcodeSupportedFormats.CODE_93,
+            Html5QrcodeSupportedFormats.EAN_13,
+            Html5QrcodeSupportedFormats.QR_CODE,
+          ],
+          verbose: false,
+        },
+      );
+
+      scannerRef.current = scanner;
+
+      await scanner.start(
+        { facingMode: 'environment' },
+        {
+          fps: 10,
+          qrbox: (width, height) => ({
+            width: Math.min(width * 0.9, 320),
+            height: Math.min(height * 0.45, 150),
+          }),
+          aspectRatio: 1.777778,
+          disableFlip: true,
+        },
+        (decodedText) => {
+          const code = decodedText.trim();
+
+          if (!code || busyRef.current) return;
+
+          busyRef.current = true;
+          onScanRef.current(code);
+
+          void stopCamera().finally(() => {
+            busyRef.current = false;
+          });
+        },
+        () => {
+          // Es normal no reconocer un código en
+          // cada fotograma mientras se enfoca.
+        },
+      );
+
+      setActive(true);
+    } catch (err) {
+      const detail =
+        err instanceof Error
+          ? `${err.name}: ${err.message}`
+          : String(err);
+
+      console.error('Error de cámara:', err);
+
+      setError(
+        `No se pudo abrir la cámara. ${detail}`,
+      );
+
+      await stopCamera();
+    } finally {
+      busyRef.current = false;
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
     return () => {
-      cancelled = true;
+      const scanner = scannerRef.current;
+      scannerRef.current = null;
 
       if (scanner) {
-        void scanner.clear().catch(() => {});
+        void (async () => {
+          try {
+            if (scanner.isScanning) {
+              await scanner.stop();
+            }
+            scanner.clear();
+          } catch {
+            // Limpieza al salir de la página.
+          }
+        })();
       }
     };
-  }, [active]);
+  }, []);
 
   return (
-    <section className="space-y-4">
-      {!active ? (
-        <button
-          type="button"
-          onClick={() => {
-            setError('');
-            setActive(true);
-          }}
-          className="w-full rounded-lg bg-blue-600 px-4 py-3 font-semibold text-white hover:bg-blue-700"
-        >
-          Abrir cámara / Escanear QR o barras
-        </button>
-      ) : (
-        <>
-          <div
-            id="pos-reader"
-            className="overflow-hidden rounded-lg border bg-white"
-          />
+    <section className="space-y-3">
+      <button
+        type="button"
+        onClick={() => {
+          if (active) {
+            void stopCamera();
+          } else {
+            void startCamera();
+          }
+        }}
+        disabled={loading}
+        className="w-full rounded-lg bg-blue-600 px-4 py-3 font-semibold text-white disabled:opacity-50"
+      >
+        {loading
+          ? 'Iniciando cámara...'
+          : active
+            ? 'Cerrar cámara'
+            : 'Abrir cámara y escanear POS'}
+      </button>
 
-          <button
-            type="button"
-            onClick={() => setActive(false)}
-            className="w-full rounded-lg border px-4 py-3"
-          >
-            Cerrar escáner
-          </button>
-        </>
+      <div
+        id={readerId}
+        className={`overflow-hidden rounded-lg border bg-black ${
+          active || loading ? 'block' : 'hidden'
+        }`}
+      />
+
+      {active && (
+        <p className="text-center text-sm text-slate-600">
+          Enfoca el código de barras SN del dispositivo.
+        </p>
       )}
 
       {error && (
-        <p role="alert" className="text-sm text-red-600">
+        <div
+          role="alert"
+          className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700"
+        >
           {error}
-        </p>
+        </div>
       )}
     </section>
   );
