@@ -100,23 +100,30 @@ export default function RegisterPosForm() {
     );
   }
 
-  function handleOcr(data: SunmiLabelData) {
-    invalidateVerification();
+ 
+function handleOcr(data: SunmiLabelData) {
+  // Invalidar una verificación anterior, porque
+  // estamos reemplazando los identificadores.
+  invalidateVerification();
 
-    // Solo sustituimos los campos que OCR reconoció.
-    // Los demás conservan su contenido anterior.
-    if (data.imei) setImei(data.imei);
-    if (data.imei2) setImei2(data.imei2);
+  setImei(data.imei);
+  setImei2(data.imei2);
+  setSerialNumber(data.serialNumber);
 
-    if (data.serialNumber) {
-      setSerialNumber(data.serialNumber);
-    }
+  // Incorporar también la marca y el modelo
+  // confirmados en el modal.
+  setBrand(data.brand);
+  setModel(data.model);
 
-    setMessage(
-      'Datos extraídos de la fotografía. ' +
-      'Revisa cada identificador antes de registrar.',
-    );
-  }
+  // Dejar S/N seleccionado por si el usuario
+  // necesita revisar o volver a escanear.
+  setTarget('sn');
+
+  setMessage(
+    'Datos confirmados. Comprueba duplicados y ' +
+    'verifica el registro antes de guardar.',
+  );
+}
 
   async function checkDuplicates() {
     setChecking(true);
