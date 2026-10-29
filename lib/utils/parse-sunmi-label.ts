@@ -5,6 +5,7 @@ export type SunmiLabelData = {
   serialNumber: string;
   brand: string;
   model: string;
+  meid?: string;
 };
 
 export function isValidImei(value: string): boolean {
@@ -12,11 +13,12 @@ export function isValidImei(value: string): boolean {
 
   let sum = 0;
 
-  for (let i = 0; i < value.length; i++) {
-    let digit = Number(value[value.length - 1 - i]);
+  for (let i = 0; i < 15; i++) {
+    let digit = Number(value[14 - i]);
 
     if (i % 2 === 1) {
       digit *= 2;
+
       if (digit > 9) digit -= 9;
     }
 
@@ -26,77 +28,69 @@ export function isValidImei(value: string): boolean {
   return sum % 10 === 0;
 }
 
-function normalizeLine(value: string): string {
-  return value
+function normalizeLine(text: string): string {
+  return text
     .normalize('NFKC')
     .toUpperCase()
-    .replace(/[｜|]/g, 'I')
+    .replace(/[|]/g, 'I')
     .trim();
 }
 
-function readDigits(
+function extractImei(
   lines: string[],
-  start: number,
+  lineIndex: number,
   label: RegExp,
 ): string {
-  const match = lines[start].match(label);
+  const match = lines[lineIndex].match(label);
 
   if (!match || match.index === undefined) {
     return '';
   }
 
-  // Tomar solamente el texto posterior a la etiqueta.
-  let current = lines[start]
+  let digits = lines[lineIndex]
     .slice(match.index + match[0].length)
-    .replace(/^[\s:;=.#-]+/, '')
-    .trim();
+    .replace(/\D/g, '');
 
-  let digits = current.replace(/\D/g, '');
-
-  // Si Tesseract dividió el IMEI, unir las líneas
-  // siguientes solamente cuando contienen dígitos.
+  // OCR puede dividir los 15 dígitos en dos líneas.
   for (
-    let index = start + 1;
-    index < Math.min(start + 3, lines.length) &&
-    digits.length < 15;
-    index++
+    let i = lineIndex + 1;
+    i < Math.min(lines.length, lineIndex + 3);
+    i++
   ) {
-    const next = lines[index].trim();
+    if (digits.length >= 15) break;
 
-    if (!/^[0-9\s]+$/.test(next)) {
-      break;
-    }
+    const next = lines[i].trim();
 
-    const nextDigits = next.replace(/\D/g, '');
+    // Solo unimos líneas compuestas por números y espacios.
+    if (!/^[0-9\s]+$/.test(next)) break;
 
-    if (digits.length + nextDigits.length > 15) {
-      break;
-    }
+    const part = next.replace(/\D/g, '');
 
-    digits += nextDigits;
+    if (digits.length + part.length > 15) break;
+
+    digits += part;
   }
 
   return /^\d{15}$/.test(digits) ? digits : '';
 }
 
-function readSerial(
+function extractSerial(
   lines: string[],
-  start: number,
+  lineIndex: number,
   label: RegExp,
 ): string {
-  const match = lines[start].match(label);
+  const line = lines[lineIndex];
+  const match = line.match(label);
 
-  if (!match || match.index === undefined) {
-    return '';
-  }
+  if (!match || match.index === undefined) return '';
 
-  let value = lines[start]
+  let value = line
     .slice(match.index + match[0].length)
-    .replace(/^[\s:;=.#-]+/, '')
-    .trim();
+    .trim()
+    .replace(/^[\s:;=.#-]+/, '');
 
   if (!value) {
-    const next = lines[start + 1] ?? '';
+    const next = lines[lineIndex + 1] ?? '';
 
     if (/^[A-Z0-9-]{6,100}$/.test(next)) {
       value = next;
@@ -104,11 +98,10 @@ function readSerial(
   }
 
   const serial = value
-    .split(/\s+(?=IMEI|MODEL|FCC|IC\b)/)[0]
+    .split(/\s+(?=IMEI|MEID|MODEL|FCC|IC\b)/)[0]
     .replace(/[^A-Z0-9-]/g, '');
 
-  return serial.length >= 6 &&
-    serial.length <= 100
+  return /^[A-Z0-9-]{6,100}$/.test(serial)
     ? serial
     : '';
 }
@@ -121,75 +114,80 @@ export function parseSunmiLabel(
     .map(normalizeLine)
     .filter(Boolean);
 
-  const result: SunmiLabelData = {
+  const combined = lines.join(' ');
+
+  const data: SunmiLabelData = {
     imei: '',
     imei2: '',
     serialNumber: '',
     brand: '',
     model: '',
+    meid: '',
   };
 
-  const imei1Pattern =
-    /\bIME[I1L]\s*1\s*[:=#.-]*/i;
-
-  const imei2Pattern =
-    /\bIME[I1L]\s*2\s*[:=#.-]*/i;
-
-  const serialPattern =
-    /\b(?:S\s*\/\s*N|S\s*N)\s*[:=#.-]*/i;
-
-  const combined = lines.join(' ');
-
-  if (/\bSUNMI\b/i.test(combined)) {
-    result.brand = 'SUNMI';
+  if (/\bSUNMI\b/.test(combined)) {
+    data.brand = 'SUNMI';
   }
 
-  const modelMatch = combined.match(
-    /\b(?:MODEL\s*[:=#.-]?\s*)?(T5940)\b/i,
-  );
-
-  if (modelMatch) {
-    result.model = 'V2s / T5940';
-  } else if (/\bV2S\b/i.test(combined)) {
-    result.model = 'V2s';
+  // Priorizar el código de modelo impreso.
+  if (/\bT5921\b/.test(combined)) {
+    data.model = 'V2 PRO / T5921';
+  } else if (/\bT5940\b/.test(combined)) {
+    data.model = 'V2s / T5940';
+  } else if (/\bV2\s*PRO\b/.test(combined)) {
+    data.model = 'V2 PRO';
+  } else if (/\bV2S\b/.test(combined)) {
+    data.model = 'V2s';
   }
+
+  const imei1Pattern = /\bIME[I1L]\s*1?\s*[:=#.-]*/i;
+  const imei2Pattern = /\bIME[I1L]\s*2\s*[:=#.-]*/i;
+  const serialPattern = /\bS\s*\/?\s*N\s*[:=#.-]*/i;
+  const meidPattern = /\bMEID\s*[:=#.-]*/i;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    if (
-      !result.imei &&
-      imei1Pattern.test(line)
-    ) {
-      result.imei = readDigits(
-        lines,
-        i,
-        imei1Pattern,
-      );
-    }
-
-    if (
-      !result.imei2 &&
-      imei2Pattern.test(line)
-    ) {
-      result.imei2 = readDigits(
+    // Evaluar IMEI2 antes de IMEI1.
+    if (imei2Pattern.test(line)) {
+      data.imei2 ||= extractImei(
         lines,
         i,
         imei2Pattern,
       );
+      continue;
     }
 
-    if (
-      !result.serialNumber &&
-      serialPattern.test(line)
-    ) {
-      result.serialNumber = readSerial(
+    if (imei1Pattern.test(line)) {
+      data.imei ||= extractImei(
+        lines,
+        i,
+        imei1Pattern,
+      );
+      continue;
+    }
+
+    if (serialPattern.test(line)) {
+      data.serialNumber ||= extractSerial(
         lines,
         i,
         serialPattern,
       );
+      continue;
+    }
+
+    const meidMatch = line.match(meidPattern);
+
+    if (meidMatch && meidMatch.index !== undefined) {
+      const value = line
+        .slice(meidMatch.index + meidMatch[0].length)
+        .replace(/[^A-Z0-9]/g, '');
+
+      if (/^[A-F0-9]{14}$/.test(value)) {
+        data.meid = value;
+      }
     }
   }
 
-  return result;
+  return data;
 }

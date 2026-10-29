@@ -2,88 +2,127 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import {
+  Camera,
+  CameraOff,
+  CheckCircle2,
+  LoaderCircle,
+  ScanLine,
+} from 'lucide-react';
+
 import type { IScannerControls } from '@zxing/browser';
 
-type Props = {
+type ScannerPosProps = {
   onScan: (code: string) => void;
   label?: string;
 };
 
 export default function ScannerPos({
   onScan,
-  label = 'código',
-}: Props) {
+  label = 'código QR o de barras',
+}: ScannerPosProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+
   const streamRef = useRef<MediaStream | null>(null);
   const controlsRef = useRef<IScannerControls | null>(null);
+
   const onScanRef = useRef(onScan);
 
   const startingRef = useRef(false);
   const detectedRef = useRef(false);
-  const mountedRef = useRef(true);
+  const mountedRef = useRef(false);
+
+  // Permite cancelar un inicio de cámara todavía pendiente.
+  const sessionRef = useRef(0);
 
   const [active, setActive] = useState(false);
   const [loading, setLoading] = useState(false);
+
   const [error, setError] = useState('');
+  const [lastCode, setLastCode] = useState('');
   const [cameraInfo, setCameraInfo] = useState('');
 
   useEffect(() => {
     onScanRef.current = onScan;
   }, [onScan]);
 
-  function stopCamera() {
+  function releaseCamera(updateState = true) {
+    // Invalida cualquier operación de apertura pendiente.
+    sessionRef.current += 1;
+
     controlsRef.current?.stop();
     controlsRef.current = null;
 
     streamRef.current?.getTracks().forEach((track) => {
       track.stop();
     });
-
     streamRef.current = null;
 
-    if (videoRef.current) {
-      videoRef.current.pause();
-      videoRef.current.srcObject = null;
+    const video = videoRef.current;
+
+    if (video) {
+      video.pause();
+      video.srcObject = null;
     }
 
-    if (mountedRef.current) {
+    startingRef.current = false;
+
+    if (updateState && mountedRef.current) {
       setActive(false);
       setLoading(false);
+      setCameraInfo('');
     }
   }
 
   async function startCamera() {
-    if (startingRef.current || streamRef.current) return;
+    if (startingRef.current || streamRef.current) {
+      return;
+    }
+
+    const sessionId = ++sessionRef.current;
 
     startingRef.current = true;
     detectedRef.current = false;
+
     setLoading(true);
     setActive(true);
     setError('');
+    setLastCode('');
     setCameraInfo('');
 
     try {
       if (!window.isSecureContext) {
-        throw new Error('La cámara necesita HTTPS.');
+        throw new Error(
+          'La cámara requiere una conexión HTTPS segura.',
+        );
       }
 
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error(
-          'Este navegador no admite acceso a la cámara.',
+          'Este navegador no permite acceder a la cámara.',
         );
       }
 
-      // Solicitar la cámara antes de cargar ZXing.
+      // Solicitar primero la cámara trasera.
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: false,
         video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
+          facingMode: {
+            ideal: 'environment',
+          },
+          width: {
+            ideal: 1280,
+          },
+          height: {
+            ideal: 720,
+          },
         },
       });
 
-      if (!mountedRef.current) {
+      if (
+        !mountedRef.current ||
+        sessionId !== sessionRef.current
+      ) {
         stream.getTracks().forEach((track) => track.stop());
         return;
       }
@@ -93,10 +132,12 @@ export default function ScannerPos({
       const video = videoRef.current;
 
       if (!video) {
-        throw new Error('No se encontró el visor de video.');
+        throw new Error(
+          'No se encontró el visor de la cámara.',
+        );
       }
 
-      // Importante para Safari en iPhone.
+      // Configuración importante para Safari en iPhone.
       video.muted = true;
       video.autoplay = true;
       video.playsInline = true;
@@ -104,84 +145,125 @@ export default function ScannerPos({
 
       await video.play();
 
-      const videoTrack = stream.getVideoTracks()[0];
-
-      if (!videoTrack || videoTrack.readyState !== 'live') {
-        throw new Error('La cámara no está transmitiendo video.');
+      if (
+        !mountedRef.current ||
+        sessionId !== sessionRef.current
+      ) {
+        return;
       }
 
-      const settings = videoTrack.getSettings();
+      const track = stream.getVideoTracks()[0];
 
-      if (mountedRef.current) {
-        setCameraInfo(
-          `Cámara activa: ${settings.width ?? '?'} × ${
-            settings.height ?? '?'
-          }`,
+      if (!track || track.readyState !== 'live') {
+        throw new Error(
+          'La cámara no está transmitiendo video.',
         );
       }
 
-      const { BrowserMultiFormatOneDReader } =
+      const settings = track.getSettings();
+
+      setCameraInfo(
+        `Cámara activa: ${settings.width ?? '?'} × ${
+          settings.height ?? '?'
+        }`,
+      );
+
+      // Cargar ZXing solo después de abrir el video.
+      const { BrowserMultiFormatReader } =
         await import('@zxing/browser');
 
       const { BarcodeFormat, DecodeHintType } =
         await import('@zxing/library');
 
-      const hints = new Map();
+      const hints = new Map<
+        import('@zxing/library').DecodeHintType,
+        unknown
+      >();
 
       hints.set(DecodeHintType.POSSIBLE_FORMATS, [
         BarcodeFormat.CODE_128,
         BarcodeFormat.CODE_39,
         BarcodeFormat.CODE_93,
         BarcodeFormat.EAN_13,
+        BarcodeFormat.QR_CODE,
       ]);
 
       hints.set(DecodeHintType.TRY_HARDER, true);
 
-      const reader = new BrowserMultiFormatOneDReader(hints);
+      const reader = new BrowserMultiFormatReader(hints, {
+        delayBetweenScanAttempts: 150,
+      });
 
-      // La cámara ya está abierta: ZXing solo lee el video.
+      if (
+        !mountedRef.current ||
+        sessionId !== sessionRef.current
+      ) {
+        return;
+      }
+
+      // ZXing analiza el video ya abierto.
       const controls = await reader.decodeFromVideoElement(
         video,
         (result) => {
-          if (!result || detectedRef.current) return;
+          if (
+            !result ||
+            detectedRef.current ||
+            sessionId !== sessionRef.current
+          ) {
+            return;
+          }
 
           const code = result.getText().trim();
 
           if (!code) return;
 
           detectedRef.current = true;
-          stopCamera();
+
+          setLastCode(code);
+
+          // Primero detener la cámara.
+          releaseCamera();
+
+          // Después entregar el resultado al formulario.
           onScanRef.current(code);
         },
       );
 
       if (
+        sessionId !== sessionRef.current ||
         !mountedRef.current ||
-        detectedRef.current ||
-        !streamRef.current
+        detectedRef.current
       ) {
         controls.stop();
-      } else {
-        controlsRef.current = controls;
+        return;
       }
+
+      controlsRef.current = controls;
     } catch (err) {
+      if (
+        !mountedRef.current ||
+        sessionId !== sessionRef.current
+      ) {
+        return;
+      }
+
       const message =
         err instanceof Error
           ? `${err.name}: ${err.message}`
           : String(err);
 
-      console.error('Error de cámara:', err);
+      console.error('Error al iniciar escáner:', err);
 
-      if (mountedRef.current) {
-        setError(message);
-      }
+      releaseCamera();
 
-      stopCamera();
+      setError(message);
     } finally {
-      startingRef.current = false;
+      if (sessionId === sessionRef.current) {
+        startingRef.current = false;
 
-      if (mountedRef.current) {
-        setLoading(false);
+        if (mountedRef.current) {
+          setLoading(false);
+        }
       }
     }
   }
@@ -191,34 +273,50 @@ export default function ScannerPos({
 
     return () => {
       mountedRef.current = false;
-      stopCamera();
+      releaseCamera(false);
     };
   }, []);
 
   return (
-    <section className="space-y-3">
+    <section className="space-y-4">
       <button
         type="button"
         disabled={loading}
         onClick={() => {
           if (active) {
-            stopCamera();
+            releaseCamera();
           } else {
             void startCamera();
           }
         }}
-        className="w-full rounded-xl bg-blue-600 px-4 py-3 font-semibold text-white disabled:opacity-50"
+        className="flex w-full items-center justify-center gap-3 rounded-xl bg-blue-600 px-4 py-4 font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {loading
-          ? 'Abriendo cámara...'
-          : active
-            ? 'Cerrar cámara'
-            : `Escanear ${label}`}
+        {loading ? (
+          <>
+            <LoaderCircle
+              size={21}
+              className="animate-spin"
+            />
+            Iniciando cámara...
+          </>
+        ) : active ? (
+          <>
+            <CameraOff size={21} />
+            Cerrar cámara
+          </>
+        ) : (
+          <>
+            <Camera size={21} />
+            Escanear {label}
+          </>
+        )}
       </button>
 
+      {/* El video permanece montado para evitar
+          problemas de inicialización en Safari. */}
       <div
-        className={`relative overflow-hidden rounded-xl bg-black ${
-          active || loading ? 'block' : 'hidden'
+        className={`relative overflow-hidden rounded-2xl bg-black ${
+          active ? 'block' : 'hidden'
         }`}
       >
         <video
@@ -229,15 +327,41 @@ export default function ScannerPos({
           className="block aspect-[4/3] w-full object-contain"
         />
 
+        {/* Guía visual para centrar el código */}
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <div className="h-24 w-[90%] rounded-lg border-4 border-white" />
+          <div className="relative h-28 w-[88%] rounded-lg border-[3px] border-white shadow-lg">
+            <div className="absolute -left-1 -top-1 h-7 w-7 rounded-tl-lg border-l-4 border-t-4 border-blue-400" />
+
+            <div className="absolute -right-1 -top-1 h-7 w-7 rounded-tr-lg border-r-4 border-t-4 border-blue-400" />
+
+            <div className="absolute -bottom-1 -left-1 h-7 w-7 rounded-bl-lg border-b-4 border-l-4 border-blue-400" />
+
+            <div className="absolute -bottom-1 -right-1 h-7 w-7 rounded-br-lg border-b-4 border-r-4 border-blue-400" />
+          </div>
+        </div>
+
+        <div className="absolute bottom-3 left-0 right-0 flex justify-center">
+          <span className="rounded-full bg-black/65 px-4 py-2 text-xs text-white">
+            <ScanLine
+              size={15}
+              className="mr-2 inline-block"
+            />
+            Enfoca el código
+          </span>
         </div>
       </div>
 
       {active && (
-        <p className="text-center text-sm text-slate-600">
-          Enfoca únicamente las barras de {label}.
-        </p>
+        <div className="space-y-1 text-center">
+          <p className="text-sm text-slate-600">
+            Mantén el código horizontal, completo y
+            bien enfocado.
+          </p>
+
+          <p className="text-xs text-slate-400">
+            Para SUNMI, enfoca una sola fila de barras.
+          </p>
+        </div>
       )}
 
       {cameraInfo && active && (
@@ -246,13 +370,44 @@ export default function ScannerPos({
         </p>
       )}
 
-      {error && (
-        <p
-          role="alert"
-          className="rounded-lg bg-red-50 p-3 text-sm text-red-700"
+      {lastCode && (
+        <div
+          role="status"
+          className="flex items-start gap-2 rounded-xl border border-green-200 bg-green-50 p-4 text-green-800"
         >
-          Error de cámara: {error}
-        </p>
+          <CheckCircle2
+            size={20}
+            className="mt-0.5 shrink-0"
+          />
+
+          <div className="min-w-0">
+            <p className="text-sm font-semibold">
+              Código reconocido
+            </p>
+
+            <p className="mt-1 break-all font-mono text-sm">
+              {lastCode}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div
+          role="alert"
+          className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700"
+        >
+          <p className="font-semibold">
+            No se pudo utilizar el escáner
+          </p>
+
+          <p className="mt-2 break-words">{error}</p>
+
+          <p className="mt-2 text-xs">
+            Revisa los permisos de la cámara en Safari
+            o Chrome e inténtalo nuevamente.
+          </p>
+        </div>
       )}
     </section>
   );

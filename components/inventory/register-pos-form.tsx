@@ -5,13 +5,19 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+
 import {
   AlertTriangle,
+  ArrowLeft,
+  Camera,
   CheckCircle2,
-  ScanLine,
+  ClipboardCheck,
+  LoaderCircle,
+  PackagePlus,
+  RotateCcw,
+  ShieldCheck,
 } from 'lucide-react';
 
-import ScannerPos from '@/components/scanner/scanner-pos';
 import ScannerOcr from '@/components/scanner/scanner-ocr';
 
 import {
@@ -19,10 +25,15 @@ import {
   type SunmiLabelData,
 } from '@/lib/utils/parse-sunmi-label';
 
-type ScanField = 'imei1' | 'imei2' | 'sn';
+type ModelOption =
+  | ''
+  | 'V2s / T5940'
+  | 'V2 PRO / T5921';
 
 type ExistingDevice = {
+  id: string;
   internalCode: string;
+  serialNumber: string | null;
   status: string;
   model: {
     brand: string;
@@ -30,112 +41,192 @@ type ExistingDevice = {
   };
 };
 
-const labels: Record<ScanField, string> = {
-  imei1: 'IMEI 1',
-  imei2: 'IMEI 2',
-  sn: 'S/N',
+type DeviceForm = {
+  imei: string;
+  imei2: string;
+  serialNumber: string;
+  brand: string;
+  model: ModelOption;
+  notes: string;
 };
+
+const initialForm: DeviceForm = {
+  imei: '',
+  imei2: '',
+  serialNumber: '',
+  brand: 'SUNMI',
+  model: '',
+  notes: '',
+};
+
+function normalizeModel(value: string): ModelOption {
+  const normalized = value.toUpperCase();
+
+  if (
+    normalized.includes('T5940') ||
+    normalized.includes('V2S')
+  ) {
+    return 'V2s / T5940';
+  }
+
+  if (
+    normalized.includes('T5921') ||
+    normalized.includes('V2 PRO')
+  ) {
+    return 'V2 PRO / T5921';
+  }
+
+  return '';
+}
+
+function normalizeSerial(value: string): string {
+  return value
+    .toUpperCase()
+    .replace(/\s/g, '')
+    .slice(0, 100);
+}
+
+function createFingerprint(form: DeviceForm): string {
+  return JSON.stringify({
+    imei: form.imei.trim(),
+    imei2: form.imei2.trim(),
+    serialNumber: form.serialNumber.trim(),
+    brand: form.brand.trim(),
+    model: form.model,
+  });
+}
 
 export default function RegisterPosForm() {
   const router = useRouter();
 
-  const [target, setTarget] = useState<ScanField>('imei1');
-
-  const [imei, setImei] = useState('');
-  const [imei2, setImei2] = useState('');
-  const [serialNumber, setSerialNumber] = useState('');
-
-  const [brand, setBrand] = useState('SUNMI');
-  const [model, setModel] = useState('V2s / T5940');
-  const [notes, setNotes] = useState('');
+  const [form, setForm] = useState<DeviceForm>({
+    ...initialForm,
+  });
 
   const [checking, setChecking] = useState(false);
   const [saving, setSaving] = useState(false);
+
   const [existing, setExisting] =
     useState<ExistingDevice | null>(null);
 
-  const [error, setError] = useState('');
-  const [message, setMessage] = useState('');
+  const [verifiedFingerprint, setVerifiedFingerprint] =
+    useState('');
+
   const [reviewed, setReviewed] = useState(false);
 
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [registeredCode, setRegisteredCode] = useState('');
+
   function invalidateVerification() {
-    setExisting(null);
+    setVerifiedFingerprint('');
     setReviewed(false);
-    setMessage('');
+    setExisting(null);
     setError('');
+    setMessage('');
+    setRegisteredCode('');
   }
 
-  function handleScan(value: string) {
-    const code = value.trim();
+  function updateForm(
+    field: keyof DeviceForm,
+    value: string,
+  ) {
+    if (checking || saving) return;
 
     invalidateVerification();
 
-    if (target === 'imei1') {
-      if (!/^\d{15}$/.test(code)) {
-        setError('IMEI 1 debe tener 15 dígitos.');
-        return;
-      }
+    setForm((previous) => ({
+      ...previous,
+      [field]: value,
+    }));
+  }
 
-      setImei(code);
-      setTarget('imei2');
-    } else if (target === 'imei2') {
-      if (!/^\d{15}$/.test(code)) {
-        setError('IMEI 2 debe tener 15 dígitos.');
-        return;
-      }
+  function handleOcr(data: SunmiLabelData) {
+    if (checking || saving) return;
 
-      setImei2(code);
-      setTarget('sn');
-    } else {
-      if (!code || code.length > 100) {
-        setError('El S/N no es válido.');
-        return;
-      }
+    invalidateVerification();
 
-      setSerialNumber(code.toUpperCase());
-    }
+    const detectedModel = normalizeModel(data.model);
+
+    setForm((previous) => ({
+      ...previous,
+      imei: data.imei || '',
+      imei2: data.imei2 || '',
+      serialNumber: normalizeSerial(
+        data.serialNumber || '',
+      ),
+      brand: data.brand?.trim().toUpperCase() || 'SUNMI',
+      model: detectedModel,
+      notes: previous.notes,
+    }));
 
     setMessage(
-      `${labels[target]} capturado. Revisa el valor.`,
+      'Datos recibidos desde OCR. Verifica el modelo, ' +
+      'los IMEI y el S/N antes de registrar.',
     );
   }
 
- 
-function handleOcr(data: SunmiLabelData) {
-  // Invalidar una verificación anterior, porque
-  // estamos reemplazando los identificadores.
-  invalidateVerification();
+  const isV2s = form.model === 'V2s / T5940';
+  const isV2Pro = form.model === 'V2 PRO / T5921';
 
-  setImei(data.imei);
-  setImei2(data.imei2);
-  setSerialNumber(data.serialNumber);
+  const imei1Valid = isValidImei(form.imei);
 
-  // Incorporar también la marca y el modelo
-  // confirmados en el modal.
-  setBrand(data.brand);
-  setModel(data.model);
+  const imei2Valid = isV2s
+    ? isValidImei(form.imei2)
+    : !form.imei2 || isValidImei(form.imei2);
 
-  // Dejar S/N seleccionado por si el usuario
-  // necesita revisar o volver a escanear.
-  setTarget('sn');
+  const serialValid =
+    /^[A-Z0-9-]{6,100}$/.test(form.serialNumber);
 
-  setMessage(
-    'Datos confirmados. Comprueba duplicados y ' +
-    'verifica el registro antes de guardar.',
-  );
-}
+  const differentImeis =
+    !form.imei2 || form.imei !== form.imei2;
+
+  const brandValid =
+    form.brand.trim().toUpperCase() === 'SUNMI';
+
+  const modelValid = isV2s || isV2Pro;
+
+  const valid =
+    modelValid &&
+    imei1Valid &&
+    imei2Valid &&
+    serialValid &&
+    differentImeis &&
+    brandValid;
+
+  const fingerprint = createFingerprint(form);
+
+  const duplicatesVerified =
+    verifiedFingerprint === fingerprint &&
+    !existing;
+
+  const canSave =
+    valid &&
+    reviewed &&
+    duplicatesVerified &&
+    !checking &&
+    !saving;
 
   async function checkDuplicates() {
+    if (!valid || checking || saving) return;
+
+    const requestedFingerprint = fingerprint;
+
     setChecking(true);
     setError('');
+    setMessage('');
     setExisting(null);
+    setVerifiedFingerprint('');
 
     try {
       const params = new URLSearchParams({
-        serial: serialNumber.trim(),
-        imei: imei.trim(),
-        imei2: imei2.trim(),
+        serial: form.serialNumber.trim(),
+        imei: form.imei.trim(),
       });
+
+      if (form.imei2.trim()) {
+        params.set('imei2', form.imei2.trim());
+      }
 
       const response = await fetch(
         `/api/devices?${params.toString()}`,
@@ -149,51 +240,61 @@ function handleOcr(data: SunmiLabelData) {
 
       if (!response.ok) {
         throw new Error(
-          result.error ?? 'Error al comprobar duplicados',
+          result.error ??
+            'No se pudo comprobar el dispositivo.',
         );
+      }
+
+      if (requestedFingerprint !== createFingerprint(form)) {
+        return;
       }
 
       if (result.exists) {
         setExisting(result.device);
 
         setError(
-          'Uno de los identificadores ya está registrado.',
+          'Uno de los identificadores ya está ' +
+          'registrado en el inventario.',
         );
 
-        setReviewed(false);
-      } else {
-        setMessage(
-          'No se encontraron duplicados. ' +
-          'Puedes confirmar el registro.',
-        );
+        return;
       }
+
+      setVerifiedFingerprint(requestedFingerprint);
+
+      setMessage(
+        'No se encontraron duplicados. ' +
+        'Puedes confirmar el registro.',
+      );
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : 'Error de conexión',
+          : 'Error de conexión al comprobar duplicados.',
       );
     } finally {
       setChecking(false);
     }
   }
 
-  async function saveDevice(event: FormEvent<HTMLFormElement>) {
+  async function saveDevice(
+    event: FormEvent<HTMLFormElement>,
+  ) {
     event.preventDefault();
 
-    if (
-      saving ||
-      checking ||
-      existing ||
-      !reviewed ||
-      !valid
-    ) {
+    if (!canSave) {
+      setError(
+        'Revisa los datos, confirma la etiqueta ' +
+        'y comprueba duplicados antes de registrar.',
+      );
+
       return;
     }
 
     setSaving(true);
     setError('');
     setMessage('');
+    setRegisteredCode('');
 
     try {
       const response = await fetch('/api/devices', {
@@ -203,155 +304,283 @@ function handleOcr(data: SunmiLabelData) {
         },
         credentials: 'same-origin',
         body: JSON.stringify({
-          imei: imei.trim(),
-          imei2: imei2.trim(),
-          serialNumber: serialNumber.trim().toUpperCase(),
-          brand: brand.trim(),
-          model: model.trim(),
-          notes: notes.trim(),
+          serialNumber: form.serialNumber.trim(),
+          imei: form.imei.trim(),
+          imei2: form.imei2.trim(),
+          brand: 'SUNMI',
+          model: form.model,
+          notes: form.notes.trim(),
         }),
       });
 
       const result = await response.json();
 
       if (!response.ok) {
+        if (response.status === 409) {
+          setVerifiedFingerprint('');
+        }
+
         throw new Error(
-          result.error ?? 'No se pudo registrar el POS',
+          result.error ??
+            'No se pudo registrar el dispositivo.',
         );
       }
 
+      const internalCode: string =
+        result.device.internalCode;
+
+      setRegisteredCode(internalCode);
+
       setMessage(
-        `POS registrado correctamente: ${result.device.internalCode}`,
+        'Dispositivo registrado correctamente. ' +
+        'Se generó su entrada al almacén.',
       );
 
-      setImei('');
-      setImei2('');
-      setSerialNumber('');
-      setNotes('');
-      setTarget('imei1');
-      setReviewed(false);
+      setForm({ ...initialForm });
       setExisting(null);
+      setVerifiedFingerprint('');
+      setReviewed(false);
 
       router.refresh();
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : 'Error de conexión',
+          : 'Error de conexión al guardar el POS.',
       );
     } finally {
       setSaving(false);
     }
   }
 
-  const valid =
-    /^\d{15}$/.test(imei) &&
-    /^\d{15}$/.test(imei2) &&
-    imei !== imei2 &&
-    serialNumber.trim().length >= 6 &&
-    brand.trim().length > 0 &&
-    model.trim().length > 0;
+  function resetForm() {
+    if (checking || saving) return;
 
-  const imei1LuhnValid =
-    !imei || isValidImei(imei);
-
-  const imei2LuhnValid =
-    !imei2 || isValidImei(imei2);
+    setForm({ ...initialForm });
+    invalidateVerification();
+  }
 
   return (
     <main className="min-h-screen bg-slate-50 p-4 text-slate-900 md:p-8">
-      <div className="mx-auto max-w-2xl space-y-6">
-        <header>
+      <div className="mx-auto max-w-3xl space-y-6">
+        <header className="space-y-3">
           <Link
             href="/inventario"
-            className="text-sm font-medium text-blue-600"
+            className="inline-flex items-center gap-2 text-sm font-medium text-blue-600 hover:text-blue-700"
           >
-            ← Volver al inventario
+            <ArrowLeft size={17} />
+            Volver al inventario
           </Link>
 
-          <h1 className="mt-4 text-2xl font-bold">
-            Registrar dispositivo POS
-          </h1>
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wider text-blue-600">
+              INVENTARIO POS
+            </p>
 
-          <p className="mt-2 text-sm text-slate-500">
-            Captura los identificadores del fabricante
-            mediante fotografía, códigos de barras
-            o ingreso manual.
-          </p>
+            <h1 className="mt-2 text-2xl font-bold tracking-tight md:text-3xl">
+              Registrar dispositivo POS
+            </h1>
+
+            <p className="mt-2 text-sm leading-relaxed text-slate-500">
+              Registra equipos SUNMI mediante una fotografía
+              de su etiqueta o introduciendo manualmente
+              sus identificadores.
+            </p>
+          </div>
         </header>
+
+        {registeredCode && (
+          <div
+            role="status"
+            className="rounded-2xl border border-green-200 bg-green-50 p-5"
+          >
+            <div className="flex items-start gap-3">
+              <CheckCircle2
+                size={24}
+                className="shrink-0 text-green-600"
+              />
+
+              <div className="min-w-0">
+                <p className="font-bold text-green-900">
+                  Registro completado
+                </p>
+
+                <p className="mt-1 text-sm text-green-800">
+                  Código interno generado:
+                </p>
+
+                <p className="mt-2 break-all font-mono text-sm font-semibold text-green-900">
+                  {registeredCode}
+                </p>
+
+                <Link
+                  href="/inventario"
+                  className="mt-3 inline-block text-sm font-semibold text-green-800 underline"
+                >
+                  Ver inventario actualizado
+                </Link>
+              </div>
+            </div>
+          </div>
+        )}
 
         <form
           onSubmit={saveDevice}
-          className="space-y-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
+          className="space-y-7 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6"
         >
-          <section className="space-y-3">
-            <h2 className="text-lg font-semibold">
-              1. Fotografiar etiqueta completa
-            </h2>
+          {/* SECCIÓN 1: OCR */}
+          <section className="space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="rounded-xl bg-blue-50 p-3 text-blue-600">
+                <Camera size={23} />
+              </div>
+
+              <div>
+                <h2 className="text-lg font-bold">
+                  1. Captura de datos
+                </h2>
+
+                <p className="mt-1 text-sm text-slate-500">
+                  Fotografía la etiqueta completa del SUNMI
+                  o continúa con el registro manual.
+                </p>
+              </div>
+            </div>
 
             <ScannerOcr onExtract={handleOcr} />
+
+            <p className="text-xs text-slate-500">
+              El OCR intenta detectar automáticamente
+              el modelo, IMEI y número de serie.
+              Todos los datos deben revisarse antes de guardar.
+            </p>
           </section>
 
-          <div className="flex items-center gap-3">
-            <div className="h-px flex-1 bg-slate-200" />
-            <span className="text-xs text-slate-400">
-              O escanea individualmente
-            </span>
-            <div className="h-px flex-1 bg-slate-200" />
-          </div>
+          {/* SECCIÓN 2: IDENTIFICACIÓN */}
+          <section className="space-y-5 border-t border-slate-200 pt-6">
+            <div>
+              <h2 className="text-lg font-bold">
+                2. Identificación del equipo
+              </h2>
 
-          <section className="space-y-3">
-            <h2 className="flex items-center gap-2 text-lg font-semibold">
-              <ScanLine size={21} />
-              2. Escaneo de códigos de barras
-            </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Selecciona el modelo correcto indicado
+                en la etiqueta del fabricante.
+              </p>
+            </div>
 
-            {(
-              [
-                ['imei1', 'IMEI 1', imei],
-                ['imei2', 'IMEI 2', imei2],
-                ['sn', 'S/N', serialNumber],
-              ] as const
-            ).map(([field, label, value]) => (
-              <button
-                key={field}
-                type="button"
-                onClick={() => setTarget(field)}
-                className={`w-full rounded-xl border p-3 text-left ${
-                  target === field
-                    ? 'border-blue-600 bg-blue-50'
-                    : 'border-slate-200'
-                }`}
+            <div className="space-y-2">
+              <label
+                htmlFor="device-brand"
+                className="block text-sm font-semibold"
               >
-                <span className="flex items-center justify-between">
-                  <span className="font-semibold">{label}</span>
+                Marca
+              </label>
 
-                  <span className="text-xs text-slate-600">
-                    {value ? 'Capturado' : 'Pendiente'}
-                  </span>
-                </span>
+              <input
+                id="device-brand"
+                value={form.brand}
+                readOnly
+                className="w-full rounded-xl border border-slate-200 bg-slate-100 px-4 py-3 text-base text-slate-700"
+              />
+            </div>
 
-                <span className="mt-1 block break-all text-sm text-slate-500">
-                  {value || 'Seleccionar para escanear'}
-                </span>
-              </button>
-            ))}
+            <div className="space-y-2">
+              <label
+                htmlFor="device-model"
+                className="block text-sm font-semibold"
+              >
+                Modelo *
+              </label>
 
-            <ScannerPos
-              label={labels[target]}
-              onScan={handleScan}
-            />
+              <select
+                id="device-model"
+                required
+                disabled={checking || saving}
+                value={form.model}
+                onChange={(event) =>
+                  updateForm('model', event.target.value)
+                }
+                className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-base outline-none focus:border-blue-600"
+              >
+                <option value="">
+                  Selecciona el modelo
+                </option>
+
+                <option value="V2s / T5940">
+                  SUNMI V2s — T5940
+                </option>
+
+                <option value="V2 PRO / T5921">
+                  SUNMI V2 PRO — T5921
+                </option>
+              </select>
+            </div>
+
+            {isV2s && (
+              <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+                Este modelo requiere S/N, IMEI 1 e IMEI 2.
+              </div>
+            )}
+
+            {isV2Pro && (
+              <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+                Este modelo requiere S/N e IMEI 1.
+                IMEI 2 es opcional.
+              </div>
+            )}
           </section>
 
-          <section className="space-y-4">
-            <h2 className="text-lg font-semibold">
-              3. Revisar identificadores
-            </h2>
+          {/* SECCIÓN 3: IDENTIFICADORES */}
+          <section className="space-y-5 border-t border-slate-200 pt-6">
+            <div>
+              <h2 className="text-lg font-bold">
+                3. Identificadores del dispositivo
+              </h2>
+
+              <p className="mt-1 text-sm text-slate-500">
+                Corrige cualquier error del OCR usando
+                la etiqueta física como referencia.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <label
+                htmlFor="serialNumber"
+                className="block text-sm font-semibold"
+              >
+                S/N — Número de serie *
+              </label>
+
+              <input
+                id="serialNumber"
+                required
+                maxLength={100}
+                disabled={checking || saving}
+                autoComplete="off"
+                value={form.serialNumber}
+                onChange={(event) =>
+                  updateForm(
+                    'serialNumber',
+                    normalizeSerial(event.target.value),
+                  )
+                }
+                placeholder="Número de serie del fabricante"
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 font-mono text-base outline-none focus:border-blue-600"
+              />
+
+              {form.serialNumber && !serialValid && (
+                <p className="text-xs text-red-600">
+                  Utiliza entre 6 y 100 caracteres
+                  alfanuméricos, sin espacios.
+                </p>
+              )}
+            </div>
 
             <div className="space-y-2">
               <label
                 htmlFor="imei1"
-                className="block text-sm font-medium"
+                className="block text-sm font-semibold"
               >
                 IMEI 1 *
               </label>
@@ -361,159 +590,104 @@ function handleOcr(data: SunmiLabelData) {
                 required
                 inputMode="numeric"
                 maxLength={15}
-                value={imei}
-                onChange={(e) => {
-                  invalidateVerification();
-                  setImei(e.target.value);
-                }}
-                className="w-full rounded-xl border p-3"
+                disabled={checking || saving}
+                autoComplete="off"
+                value={form.imei}
+                onChange={(event) =>
+                  updateForm(
+                    'imei',
+                    event.target.value
+                      .replace(/\D/g, '')
+                      .slice(0, 15),
+                  )
+                }
+                placeholder="15 dígitos"
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 font-mono text-base outline-none focus:border-blue-600"
               />
 
-              {imei &&
-                !imei1LuhnValid && (
-                  <p className="text-xs text-amber-700">
-                    Verifica IMEI 1: no supera la comprobación Luhn.
-                  </p>
-                )}
+              {form.imei && !imei1Valid && (
+                <p className="text-xs text-amber-700">
+                  El IMEI 1 no supera la verificación Luhn
+                  o todavía no tiene 15 dígitos.
+                </p>
+              )}
             </div>
 
             <div className="space-y-2">
               <label
                 htmlFor="imei2"
-                className="block text-sm font-medium"
+                className="block text-sm font-semibold"
               >
-                IMEI 2 *
+                IMEI 2{' '}
+                {isV2s
+                  ? '*'
+                  : '(opcional para V2 PRO)'}
               </label>
 
               <input
                 id="imei2"
-                required
+                required={isV2s}
                 inputMode="numeric"
                 maxLength={15}
-                value={imei2}
-                onChange={(e) => {
-                  invalidateVerification();
-                  setImei2(e.target.value);
-                }}
-                className="w-full rounded-xl border p-3"
+                disabled={checking || saving}
+                autoComplete="off"
+                value={form.imei2}
+                onChange={(event) =>
+                  updateForm(
+                    'imei2',
+                    event.target.value
+                      .replace(/\D/g, '')
+                      .slice(0, 15),
+                  )
+                }
+                placeholder={
+                  isV2s
+                    ? 'Segundo IMEI, 15 dígitos'
+                    : 'Dejar vacío si no existe'
+                }
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 font-mono text-base outline-none focus:border-blue-600"
               />
 
-              {imei2 &&
-                !imei2LuhnValid && (
-                  <p className="text-xs text-amber-700">
-                    Verifica IMEI 2: no supera la comprobación Luhn.
-                  </p>
-                )}
-            </div>
-
-            <div className="space-y-2">
-              <label
-                htmlFor="serialNumber"
-                className="block text-sm font-medium"
-              >
-                S/N — Número de serie *
-              </label>
-
-              <input
-                id="serialNumber"
-                required
-                maxLength={100}
-                value={serialNumber}
-                onChange={(e) => {
-                  invalidateVerification();
-                  setSerialNumber(
-                    e.target.value.toUpperCase(),
-                  );
-                }}
-                className="w-full rounded-xl border p-3"
-              />
-            </div>
-
-            {imei && imei2 && imei === imei2 && (
-              <p className="text-sm text-red-600">
-                IMEI 1 e IMEI 2 deben ser diferentes.
-              </p>
-            )}
-
-            <button
-              type="button"
-              disabled={!valid || checking}
-              onClick={() => void checkDuplicates()}
-              className="w-full rounded-xl border border-blue-600 p-3 font-semibold text-blue-700 disabled:opacity-50"
-            >
-              {checking
-                ? 'Comprobando...'
-                : 'Comprobar duplicados'}
-            </button>
-
-            {existing && (
-              <div className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900">
-                <p className="font-semibold">
-                  Dispositivo ya registrado
+              {form.imei2 && !imei2Valid && (
+                <p className="text-xs text-amber-700">
+                  Verifica los 15 dígitos y el dígito
+                  de control del IMEI 2.
                 </p>
-                <p>Código: {existing.internalCode}</p>
+              )}
+
+              {!differentImeis && (
+                <p className="text-sm font-medium text-red-600">
+                  IMEI 1 e IMEI 2 deben ser diferentes.
+                </p>
+              )}
+            </div>
+
+            <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600">
+              <div className="flex items-start gap-2">
+                <ShieldCheck
+                  size={19}
+                  className="shrink-0 text-blue-600"
+                />
+
                 <p>
-                  Modelo: {existing.model.brand}{' '}
-                  {existing.model.model}
+                  El sistema comprobará si alguno de estos
+                  identificadores ya pertenece a otro
+                  dispositivo registrado en Supabase.
                 </p>
-                <p>Estado: {existing.status}</p>
               </div>
-            )}
+            </div>
           </section>
 
-          <section className="space-y-4">
-            <h2 className="text-lg font-semibold">
-              4. Información del dispositivo
+          {/* SECCIÓN 4: INFORMACIÓN ADICIONAL */}
+          <section className="space-y-4 border-t border-slate-200 pt-6">
+            <h2 className="text-lg font-bold">
+              4. Información adicional
             </h2>
-
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <label
-                  htmlFor="brand"
-                  className="block text-sm font-medium"
-                >
-                  Marca *
-                </label>
-
-                <input
-                  id="brand"
-                  required
-                  maxLength={100}
-                  value={brand}
-                  onChange={(e) => {
-                    invalidateVerification();
-                    setBrand(e.target.value);
-                  }}
-                  className="w-full rounded-xl border p-3"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label
-                  htmlFor="model"
-                  className="block text-sm font-medium"
-                >
-                  Modelo *
-                </label>
-
-                <input
-                  id="model"
-                  required
-                  maxLength={100}
-                  value={model}
-                  onChange={(e) => {
-                    invalidateVerification();
-                    setModel(e.target.value);
-                  }}
-                  className="w-full rounded-xl border p-3"
-                />
-              </div>
-            </div>
 
             <div className="space-y-2">
               <label
                 htmlFor="notes"
-                className="block text-sm font-medium"
+                className="block text-sm font-semibold"
               >
                 Observaciones
               </label>
@@ -522,66 +696,169 @@ function handleOcr(data: SunmiLabelData) {
                 id="notes"
                 rows={3}
                 maxLength={1000}
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                className="w-full rounded-xl border p-3"
+                disabled={checking || saving}
+                value={form.notes}
+                onChange={(event) =>
+                  updateForm('notes', event.target.value)
+                }
+                placeholder="Detalles opcionales del equipo"
+                className="w-full resize-y rounded-xl border border-slate-300 px-4 py-3 text-base outline-none focus:border-blue-600"
               />
             </div>
 
-            <div className="rounded-xl bg-blue-50 p-3 text-sm text-blue-800">
-              Almacén inicial: ALM-001
+            <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+              <p className="text-sm font-semibold text-blue-900">
+                Almacén principal
+              </p>
+
+              <p className="mt-1 text-sm text-blue-700">
+                ALM-001
+              </p>
+
+              <p className="mt-2 text-xs text-blue-600">
+                El dispositivo ingresará con estado
+                «En almacén».
+              </p>
             </div>
           </section>
 
-          <section className="space-y-3 border-t pt-5">
-            <label className="flex items-start gap-3 rounded-xl bg-slate-50 p-4 text-sm">
+          {/* SECCIÓN 5: VALIDACIÓN */}
+          <section className="space-y-4 border-t border-slate-200 pt-6">
+            <h2 className="flex items-center gap-2 text-lg font-bold">
+              <ClipboardCheck size={22} />
+              5. Confirmar y registrar
+            </h2>
+
+            <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
               <input
                 type="checkbox"
                 checked={reviewed}
-                onChange={(e) => setReviewed(e.target.checked)}
-                className="mt-1"
+                disabled={checking || saving}
+                onChange={(event) => {
+                  setReviewed(event.target.checked);
+                  setError('');
+                }}
+                className="mt-1 h-4 w-4 accent-blue-600"
               />
 
-              <span>
-                He comprobado IMEI 1, IMEI 2 y S/N
-                con los valores impresos en el dispositivo.
+              <span className="text-sm text-slate-700">
+                He comprobado el modelo, S/N y los IMEI
+                contra la etiqueta física del SUNMI.
               </span>
             </label>
+
+            <button
+              type="button"
+              disabled={!valid || checking || saving}
+              onClick={() => void checkDuplicates()}
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-blue-600 bg-white px-4 py-3 font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {checking ? (
+                <>
+                  <LoaderCircle
+                    size={19}
+                    className="animate-spin"
+                  />
+                  Comprobando...
+                </>
+              ) : (
+                <>
+                  <ShieldCheck size={19} />
+                  Comprobar duplicados
+                </>
+              )}
+            </button>
+
+            {duplicatesVerified && (
+              <p className="flex items-center gap-2 text-sm font-medium text-green-700">
+                <CheckCircle2 size={18} />
+                Identificadores disponibles.
+              </p>
+            )}
+
+            {existing && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle
+                    size={20}
+                    className="shrink-0"
+                  />
+
+                  <div>
+                    <p className="font-bold">
+                      Dispositivo duplicado
+                    </p>
+
+                    <p className="mt-1">
+                      Código: {existing.internalCode}
+                    </p>
+
+                    <p>
+                      Modelo: {existing.model.brand}{' '}
+                      {existing.model.model}
+                    </p>
+
+                    <p>Estado: {existing.status}</p>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {error && (
               <div
                 role="alert"
-                className="flex gap-2 rounded-xl bg-red-50 p-3 text-sm text-red-700"
+                className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700"
               >
-                <AlertTriangle size={19} />
-                <span>{error}</span>
+                <AlertTriangle
+                  size={19}
+                  className="shrink-0"
+                />
+                <p>{error}</p>
               </div>
             )}
 
             {message && (
               <div
                 role="status"
-                className="flex gap-2 rounded-xl bg-green-50 p-3 text-sm text-green-800"
+                className="flex items-start gap-2 rounded-xl border border-green-200 bg-green-50 p-4 text-sm text-green-800"
               >
-                <CheckCircle2 size={19} />
-                <span>{message}</span>
+                <CheckCircle2
+                  size={19}
+                  className="shrink-0"
+                />
+                <p>{message}</p>
               </div>
             )}
 
             <button
               type="submit"
-              disabled={
-                !valid ||
-                !reviewed ||
-                Boolean(existing) ||
-                checking ||
-                saving
-              }
-              className="w-full rounded-xl bg-blue-600 px-4 py-4 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!canSave}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-4 font-bold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {saving
-                ? 'Registrando dispositivo...'
-                : 'Registrar POS'}
+              {saving ? (
+                <>
+                  <LoaderCircle
+                    size={20}
+                    className="animate-spin"
+                  />
+                  Guardando dispositivo...
+                </>
+              ) : (
+                <>
+                  <PackagePlus size={20} />
+                  Registrar POS
+                </>
+              )}
+            </button>
+
+            <button
+              type="button"
+              disabled={checking || saving}
+              onClick={resetForm}
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+            >
+              <RotateCcw size={17} />
+              Limpiar formulario
             </button>
           </section>
         </form>
