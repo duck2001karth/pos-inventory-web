@@ -1,13 +1,76 @@
 
+import Link from 'next/link';
+import {
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  Plus,
+} from 'lucide-react';
+
+import { requireUser } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 
-export default async function InventarioPage() {
+import {
+  INVENTORY_PAGE_SIZE,
+  inventorySelect,
+  inventoryWhere,
+} from '@/lib/services/inventory-query';
+
+import type { InventoryDevice } from '@/types/inventory';
+
+import InventorySearch from '@/components/inventory/inventory-search';
+import InventoryTable from '@/components/inventory/inventory-table';
+
+type Props = {
+  searchParams: Promise<{
+    page?: string | string[];
+    q?: string | string[];
+  }>;
+};
+
+function pageUrl(page: number, q: string) {
+  const params = new URLSearchParams();
+
+  params.set('page', String(page));
+
+  if (q) {
+    params.set('q', q);
+  }
+
+  return `/inventario?${params.toString()}`;
+}
+
+export default async function InventoryContent({
+  searchParams,
+}: Props) {
+  const user = await requireUser();
+  const params = await searchParams;
+
+  const rawSearch = Array.isArray(params.q)
+    ? params.q[0]
+    : params.q;
+
+  const q = (rawSearch ?? '').trim().slice(0, 100);
+
+  const rawPage = Array.isArray(params.page)
+    ? params.page[0]
+    : params.page;
+
+  const pageNumber = Number(rawPage ?? 1);
+
+  const requestedPage =
+    Number.isSafeInteger(pageNumber) && pageNumber > 0
+      ? pageNumber
+      : 1;
+
+  const where = inventoryWhere(q);
+
   const [
     total,
-    enAlmacen,
-    asignados,
-    enReparacion,
-    dispositivos,
+    inStock,
+    assigned,
+    inRepair,
+    matches,
   ] = await Promise.all([
     prisma.device.count(),
     prisma.device.count({
@@ -19,128 +82,179 @@ export default async function InventarioPage() {
     prisma.device.count({
       where: { status: 'IN_REPAIR' },
     }),
-    prisma.device.findMany({
-      take: 50,
-      orderBy: { createdAt: 'desc' },
-      include: {
-        model: true,
-        currentLocation: true,
-      },
-    }),
+    prisma.device.count({ where }),
   ]);
 
-  const estadisticas = [
-    { titulo: 'Total de POS', cantidad: total },
-    { titulo: 'En almacén', cantidad: enAlmacen },
-    { titulo: 'Asignados', cantidad: asignados },
-    { titulo: 'En reparación', cantidad: enReparacion },
-  ];
+  const totalPages = Math.max(
+    1,
+    Math.ceil(matches / INVENTORY_PAGE_SIZE),
+  );
+
+  const page = Math.min(requestedPage, totalPages);
+
+  const rows = await prisma.device.findMany({
+    where,
+    select: inventorySelect,
+    orderBy: [
+      { createdAt: 'desc' },
+      { id: 'desc' },
+    ],
+    skip: (page - 1) * INVENTORY_PAGE_SIZE,
+    take: INVENTORY_PAGE_SIZE,
+  });
+
+  // Convertimos las fechas a texto para pasar
+  // datos serializables al componente interactivo.
+  const devices: InventoryDevice[] = rows.map((item) => ({
+    id: item.id,
+    internalCode: item.internalCode,
+    serialNumber: item.serialNumber,
+    imei: item.imei,
+    imei2: item.imei2,
+    status: item.status,
+    notes: item.notes,
+    createdAt: item.createdAt.toISOString(),
+    model: {
+      brand: item.model.brand,
+      model: item.model.model,
+    },
+    currentLocation: {
+      code: item.currentLocation.code,
+      name: item.currentLocation.name,
+    },
+  }));
+
+  const canExport =
+    user.role === 'ADMIN' ||
+    user.role === 'INVENTORY_MANAGER';
+
+  const exportUrl = q
+    ? `/api/reports/inventory?q=${encodeURIComponent(q)}`
+    : '/api/reports/inventory';
+
+  const stats = [
+    ['Total de POS', total],
+    ['En almacén', inStock],
+    ['Asignados', assigned],
+    ['En reparación', inRepair],
+  ] as const;
 
   return (
-    <main className="min-h-screen bg-slate-50 p-4 text-slate-900 md:p-8">
-      <div className="mx-auto max-w-7xl space-y-8">
-        <header>
-          <p className="text-sm font-semibold uppercase tracking-wide text-blue-600">
+    <main className="mx-auto max-w-7xl space-y-6 p-4 pb-12 text-slate-900 md:p-8">
+      <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+        <div>
+          <p className="text-sm font-semibold uppercase text-blue-600">
             Sistema de inventario POS
           </p>
 
-          <h1 className="mt-2 text-3xl font-bold">
-            Panel de inventario
+          <h1 className="mt-2 text-2xl font-bold md:text-3xl">
+            Inventario de dispositivos
           </h1>
 
-          <p className="mt-2 text-slate-500">
-            Administración y seguimiento de dispositivos POS.
+          <p className="mt-1 text-sm text-slate-500">
+            Consulta S/N, IMEI 1, IMEI 2, modelo,
+            estado y ubicación de cada POS.
           </p>
-        </header>
+        </div>
 
-        <section className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          {estadisticas.map((item) => (
-            <div
-              key={item.titulo}
-              className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
-            >
-              <p className="text-sm text-slate-500">
-                {item.titulo}
-              </p>
+        <Link
+          href="/inventario/registrar"
+          className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-700"
+        >
+          <Plus size={19} />
+          Registrar POS
+        </Link>
+      </header>
 
-              <p className="mt-3 text-3xl font-bold">
-                {item.cantidad}
-              </p>
-            </div>
-          ))}
-        </section>
-
-        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b border-slate-200 p-5">
-            <h2 className="text-lg font-semibold">
-              Dispositivos registrados
-            </h2>
-
+      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {stats.map(([label, value]) => (
+          <div
+            key={label}
+            className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
+          >
             <p className="text-sm text-slate-500">
-              Últimos 50 dispositivos del inventario.
+              {label}
+            </p>
+
+            <p className="mt-2 text-3xl font-bold">
+              {value}
             </p>
           </div>
+        ))}
+      </section>
 
-          {dispositivos.length === 0 ? (
-            <div className="px-5 py-16 text-center">
-              <p className="font-medium text-slate-700">
-                Todavía no hay dispositivos registrados.
-              </p>
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="space-y-4 border-b border-slate-200 p-4 md:p-5">
+          <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+            <div>
+              <h2 className="text-lg font-semibold">
+                Dispositivos registrados
+              </h2>
 
-              <p className="mt-2 text-sm text-slate-500">
-                Aquí aparecerán los POS cuando comencemos
-                a registrarlos.
+              <p className="mt-1 text-sm text-slate-500">
+                {matches} dispositivo(s) encontrado(s)
               </p>
             </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-slate-100">
-                  <tr>
-                    <th className="p-4">Código</th>
-                    <th className="p-4">Serie / IMEI</th>
-                    <th className="p-4">Marca y modelo</th>
-                    <th className="p-4">Estado</th>
-                    <th className="p-4">Ubicación</th>
-                  </tr>
-                </thead>
 
-                <tbody>
-                  {dispositivos.map((device) => (
-                    <tr
-                      key={device.id}
-                      className="border-t border-slate-100"
-                    >
-                      <td className="p-4 font-medium">
-                        {device.internalCode}
-                      </td>
+            {canExport && (
+              <a
+                href={exportUrl}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-600 px-4 py-3 text-sm font-semibold text-emerald-700 hover:bg-emerald-50"
+              >
+                <Download size={18} />
+                Exportar Excel
+              </a>
+            )}
+          </div>
 
-                      <td className="p-4">
-                        {device.serialNumber ??
-                          device.imei ??
-                          'Sin identificar'}
-                      </td>
+          <InventorySearch initialSearch={q} />
 
-                      <td className="p-4">
-                        {device.model.brand}{' '}
-                        {device.model.model}
-                      </td>
+          <p className="text-xs text-slate-500">
+            Pulsa un dispositivo para abrir su ficha completa.
+            En celulares puedes desplazar la tabla horizontalmente.
+          </p>
+        </div>
 
-                      <td className="p-4">
-                        {device.status}
-                      </td>
+        <InventoryTable devices={devices} />
 
-                      <td className="p-4">
-                        {device.currentLocation.name}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-      </div>
+        <footer className="flex flex-col gap-3 border-t border-slate-200 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm text-slate-500">
+            Página {page} de {totalPages} ·{' '}
+            {matches} registros ·{' '}
+            {INVENTORY_PAGE_SIZE} por página
+          </p>
+
+          <div className="flex gap-2">
+            {page > 1 ? (
+              <Link
+                href={pageUrl(page - 1, q)}
+                className="inline-flex items-center gap-1 rounded-lg border px-3 py-2 text-sm"
+              >
+                <ChevronLeft size={16} />
+                Anterior
+              </Link>
+            ) : (
+              <span className="rounded-lg border px-3 py-2 text-sm text-slate-400">
+                Anterior
+              </span>
+            )}
+
+            {page < totalPages ? (
+              <Link
+                href={pageUrl(page + 1, q)}
+                className="inline-flex items-center gap-1 rounded-lg border px-3 py-2 text-sm"
+              >
+                Siguiente
+                <ChevronRight size={16} />
+              </Link>
+            ) : (
+              <span className="rounded-lg border px-3 py-2 text-sm text-slate-400">
+                Siguiente
+              </span>
+            )}
+          </div>
+        </footer>
+      </section>
     </main>
   );
 }
