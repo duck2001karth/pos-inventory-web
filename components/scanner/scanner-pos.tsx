@@ -1,10 +1,10 @@
 
 'use client';
 
-import { useEffect, useId, useRef, useState } from 'react';
-import type { Html5Qrcode } from 'html5-qrcode';
+import { useEffect, useRef, useState } from 'react';
+import type { IScannerControls } from '@zxing/browser';
 
-type Props = {
+type ScannerPosProps = {
   onScan: (value: string) => void;
   label?: string;
 };
@@ -12,115 +12,120 @@ type Props = {
 export default function ScannerPos({
   onScan,
   label = 'código',
-}: Props) {
-  const readerId = `reader-${useId().replace(/:/g, '')}`;
-  const scannerRef = useRef<Html5Qrcode | null>(null);
-  const onScanRef = useRef(onScan);
+}: ScannerPosProps) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const controlsRef = useRef<IScannerControls | null>(null);
   const startingRef = useRef(false);
-  const stoppingRef = useRef(false);
   const detectedRef = useRef(false);
+  const onScanRef = useRef(onScan);
 
   const [active, setActive] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [lastCode, setLastCode] = useState('');
 
   useEffect(() => {
     onScanRef.current = onScan;
   }, [onScan]);
 
-  async function stopCamera() {
-    if (stoppingRef.current) return;
-    stoppingRef.current = true;
+  function stopCamera() {
+    controlsRef.current?.stop();
+    controlsRef.current = null;
 
-    const scanner = scannerRef.current;
-    scannerRef.current = null;
-
-    try {
-      if (scanner) {
-        if (scanner.isScanning) {
-          await scanner.stop();
-        }
-        scanner.clear();
-      }
-    } catch (err) {
-      console.error('Error al cerrar escáner:', err);
-    } finally {
-      setActive(false);
-      stoppingRef.current = false;
-    }
+    setActive(false);
+    setLoading(false);
   }
 
   async function startCamera() {
-    if (startingRef.current || scannerRef.current) return;
+    if (startingRef.current || controlsRef.current) return;
 
     startingRef.current = true;
     detectedRef.current = false;
-    setLoading(true);
+
     setError('');
+    setLastCode('');
+    setLoading(true);
+    setActive(true);
 
     try {
       if (!window.isSecureContext) {
-        throw new Error('El escáner necesita HTTPS.');
+        throw new Error('Se necesita una conexión HTTPS.');
       }
 
-      const {
-        Html5Qrcode,
-        Html5QrcodeSupportedFormats,
-      } = await import('html5-qrcode');
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error(
+          'El navegador no permite utilizar la cámara.',
+        );
+      }
 
-      const scanner = new Html5Qrcode(readerId, {
-        formatsToSupport: [
-          Html5QrcodeSupportedFormats.CODE_128,
-          Html5QrcodeSupportedFormats.CODE_39,
-          Html5QrcodeSupportedFormats.CODE_93,
-          Html5QrcodeSupportedFormats.EAN_13,
-          Html5QrcodeSupportedFormats.QR_CODE,
-        ],
-        verbose: false,
-      });
+      const { BrowserMultiFormatOneDReader } =
+        await import('@zxing/browser');
 
-      scannerRef.current = scanner;
+      const { BarcodeFormat, DecodeHintType } =
+        await import('@zxing/library');
 
-      await scanner.start(
-        { facingMode: 'environment' },
+      const hints = new Map();
+      hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+        BarcodeFormat.CODE_128,
+        BarcodeFormat.CODE_39,
+        BarcodeFormat.CODE_93,
+        BarcodeFormat.EAN_13,
+      ]);
+
+      hints.set(DecodeHintType.TRY_HARDER, true);
+
+      const reader = new BrowserMultiFormatOneDReader(
+        hints,
+        { delayBetweenScanAttempts: 120 },
+      );
+
+      if (!videoRef.current) {
+        throw new Error('No se encontró el elemento de video.');
+      }
+
+      const controls = await reader.decodeFromConstraints(
         {
-          fps: 15,
-          qrbox: (width, height) => ({
-            width: Math.max(
-              1,
-              Math.floor(Math.min(width * 0.95, 450)),
-            ),
-            height: Math.max(
-              1,
-              Math.floor(Math.min(height * 0.3, 140)),
-            ),
-          }),
-          disableFlip: true,
+          audio: false,
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
         },
-        (decodedText) => {
-          const value = decodedText.trim();
+        videoRef.current,
+        (result, _error, scannerControls) => {
+          if (!result || detectedRef.current) return;
 
-          if (!value || detectedRef.current) return;
+          const code = result.getText().trim();
+
+          if (!code) return;
 
           detectedRef.current = true;
+          setLastCode(code);
 
-          onScanRef.current(value);
-          void stopCamera();
-        },
-        () => {
-          // No detectar un código en cada fotograma es normal.
+          scannerControls.stop();
+          controlsRef.current = null;
+
+          setActive(false);
+          onScanRef.current(code);
         },
       );
 
-      setActive(true);
+      if (detectedRef.current) {
+        controls.stop();
+      } else {
+        controlsRef.current = controls;
+      }
     } catch (err) {
-      const message =
-        err instanceof Error
-          ? `${err.name}: ${err.message}`
-          : String(err);
+      console.error('Error de cámara:', err);
 
-      setError(`No se pudo iniciar la cámara: ${message}`);
-      await stopCamera();
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'No se pudo iniciar el escáner.',
+      );
+
+      setActive(false);
     } finally {
       startingRef.current = false;
       setLoading(false);
@@ -129,64 +134,68 @@ export default function ScannerPos({
 
   useEffect(() => {
     return () => {
-      const scanner = scannerRef.current;
-      scannerRef.current = null;
-
-      if (scanner) {
-        void (async () => {
-          try {
-            if (scanner.isScanning) {
-              await scanner.stop();
-            }
-            scanner.clear();
-          } catch {
-            // Limpieza al desmontar el componente.
-          }
-        })();
-      }
+      controlsRef.current?.stop();
+      controlsRef.current = null;
     };
   }, []);
 
   return (
-    <div className="space-y-3">
+    <section className="space-y-3">
       <button
         type="button"
+        disabled={loading}
         onClick={() => {
           if (active) {
-            void stopCamera();
+            stopCamera();
           } else {
             void startCamera();
           }
         }}
-        disabled={loading || stoppingRef.current}
-        className="w-full rounded-lg bg-blue-600 px-4 py-3 font-semibold text-white disabled:opacity-50"
+        className="w-full rounded-xl bg-blue-600 px-4 py-3 font-semibold text-white disabled:opacity-50"
       >
         {loading
-          ? 'Abriendo cámara...'
+          ? 'Iniciando cámara...'
           : active
             ? 'Cerrar cámara'
             : `Escanear ${label}`}
       </button>
 
       <div
-        id={readerId}
-        className={`overflow-hidden rounded-lg border bg-black ${
-          active || loading ? 'block' : 'hidden'
+        className={`relative overflow-hidden rounded-xl bg-black ${
+          active ? 'block' : 'hidden'
         }`}
-      />
+      >
+        <video
+          ref={videoRef}
+          autoPlay
+          muted
+          playsInline
+          className="aspect-[4/3] w-full object-cover"
+        />
+
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <div className="h-24 w-[90%] rounded-lg border-4 border-white shadow-lg" />
+        </div>
+      </div>
 
       {active && (
         <p className="text-center text-sm text-slate-600">
-          Acerca el código de barras, mantenlo horizontal
-          y enfoca solo las barras de {label}.
+          Centra únicamente las barras de {label}.
+          Mantén el teléfono firme mientras enfoca.
+        </p>
+      )}
+
+      {lastCode && (
+        <p role="status" className="break-all rounded-lg bg-green-50 p-3 text-sm text-green-800">
+          Código detectado: {lastCode}
         </p>
       )}
 
       {error && (
-        <p role="alert" className="text-sm text-red-600">
+        <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
           {error}
         </p>
       )}
-    </div>
+    </section>
   );
 }
