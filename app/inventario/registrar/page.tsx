@@ -4,8 +4,8 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import ScannerPos from './scanner-pos';
-import ScannerImagen from './scanner-imagen';
+import ScannerPos from '@/components/scanner/scanner-pos';
+import ScannerImagen from '@/components/scanner/scanner-imagen';
 
 type ExistingDevice = {
   internalCode: string;
