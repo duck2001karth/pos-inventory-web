@@ -12,6 +12,7 @@ import {
 import OcrConfirmModal from '@/components/inventory/modals/ocr-confirm-modal';
 
 import {
+  isValidImei,
   parseSunmiLabel,
   type SunmiLabelData,
 } from '@/lib/utils/parse-sunmi-label';
@@ -28,14 +29,39 @@ const emptyData: SunmiLabelData = {
   model: '',
 };
 
-export default function ScannerOcr({ onExtract }: Props) {
+function mergeResults(
+  first: SunmiLabelData,
+  second: SunmiLabelData,
+): SunmiLabelData {
+  function chooseImei(a: string, b: string) {
+    if (isValidImei(a)) return a;
+    if (isValidImei(b)) return b;
+    return a || b;
+  }
+
+  return {
+    imei: chooseImei(first.imei, second.imei),
+    imei2: chooseImei(first.imei2, second.imei2),
+    serialNumber:
+      first.serialNumber || second.serialNumber,
+    brand: first.brand || second.brand || 'SUNMI',
+    model:
+      first.model || second.model || 'V2s / T5940',
+  };
+}
+
+export default function ScannerOcr({
+  onExtract,
+}: Props) {
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
   const busyRef = useRef(false);
 
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [status, setStatus] = useState('');
   const [error, setError] = useState('');
+
   const [rawText, setRawText] = useState('');
   const [showRawText, setShowRawText] = useState(false);
 
@@ -56,21 +82,28 @@ export default function ScannerOcr({ onExtract }: Props) {
     if (!file || busyRef.current) return;
 
     busyRef.current = true;
+
     setLoading(true);
     setProgress(0);
+    setStatus('Preparando imagen...');
     setError('');
     setRawText('');
+    setShowRawText(false);
     setModalOpen(false);
 
     let worker:
-      | Awaited<ReturnType<
-          typeof import('tesseract.js')['createWorker']
-        >>
+      | Awaited<
+          ReturnType<
+            typeof import('tesseract.js')['createWorker']
+          >
+        >
       | undefined;
 
     try {
       if (!file.type.startsWith('image/')) {
-        throw new Error('Selecciona una fotografía válida.');
+        throw new Error(
+          'Selecciona una fotografía válida.',
+        );
       }
 
       if (file.size > 12 * 1024 * 1024) {
@@ -79,15 +112,19 @@ export default function ScannerOcr({ onExtract }: Props) {
         );
       }
 
+      setStatus('Cargando motor OCR...');
+
       const { createWorker, PSM } =
         await import('tesseract.js');
 
       worker = await createWorker('eng', 1, {
         logger: (message) => {
           if (message.status === 'recognizing text') {
-            setProgress(
-              Math.round((message.progress ?? 0) * 100),
+            const currentProgress = Math.round(
+              (message.progress ?? 0) * 100,
             );
+
+            setProgress(currentProgress);
           }
         },
       });
@@ -97,22 +134,94 @@ export default function ScannerOcr({ onExtract }: Props) {
         preserve_interword_spaces: '1',
       });
 
-      const response = await worker.recognize(file);
-      const text = response.data.text ?? '';
+      // Primera pasada: etiqueta completa.
+      setStatus('Leyendo etiqueta completa...');
+      setProgress(0);
 
-      setRawText(text);
+      const firstResponse = await worker.recognize(file);
 
-      const extracted = parseSunmiLabel(text);
+      const firstText = firstResponse.data.text ?? '';
+      const firstData = parseSunmiLabel(firstText);
 
-      setExtractedData({
-        imei: extracted.imei,
-        imei2: extracted.imei2,
-        serialNumber: extracted.serialNumber,
-        brand: extracted.brand || 'SUNMI',
-        model: extracted.model || 'V2s / T5940',
-      });
+      // Segunda pasada: zona de los códigos.
+      // La etiqueta SUNMI normalmente coloca
+      // IMEI1, IMEI2 y SN en la parte inferior.
+      setStatus('Mejorando lectura de IMEI y S/N...');
+      setProgress(0);
 
+      let secondText = '';
+      let secondData: SunmiLabelData = {
+        ...emptyData,
+      };
+
+      try {
+        const bitmap = await createImageBitmap(file);
+
+        try {
+          const cropTop = Math.floor(
+            bitmap.height * 0.35,
+          );
+
+          const cropHeight =
+            bitmap.height - cropTop;
+
+          const secondResponse =
+            await worker.recognize(file, {
+              rectangle: {
+                left: 0,
+                top: cropTop,
+                width: bitmap.width,
+                height: cropHeight,
+              },
+            });
+
+          secondText =
+            secondResponse.data.text ?? '';
+
+          secondData = parseSunmiLabel(secondText);
+        } finally {
+          bitmap.close();
+        }
+      } catch (secondPassError) {
+        // Si el navegador no puede procesar
+        // la segunda región, conservamos
+        // los resultados de la primera pasada.
+        console.warn(
+          'No se pudo completar segunda lectura OCR:',
+          secondPassError,
+        );
+      }
+
+      const extracted = mergeResults(
+        firstData,
+        secondData,
+      );
+
+      setRawText(
+        [
+          '=== ETIQUETA COMPLETA ===',
+          firstText || '(Sin texto detectado)',
+          '',
+          '=== ZONA DE IDENTIFICADORES ===',
+          secondText || '(Sin texto detectado)',
+        ].join('\n'),
+      );
+
+      setExtractedData(extracted);
       setProgress(100);
+
+      const count = [
+        extracted.imei,
+        extracted.imei2,
+        extracted.serialNumber,
+      ].filter(Boolean).length;
+
+      setStatus(
+        `Reconocimiento completado: ${count} de 3 identificadores.`,
+      );
+
+      // Abrimos el modal incluso si faltan datos
+      // para permitir la corrección manual.
       setModalOpen(true);
     } catch (err) {
       console.error('Error de OCR:', err);
@@ -124,7 +233,14 @@ export default function ScannerOcr({ onExtract }: Props) {
       );
     } finally {
       if (worker) {
-        await worker.terminate().catch(() => {});
+        try {
+          await worker.terminate();
+        } catch (err) {
+          console.warn(
+            'No se pudo liberar el worker OCR:',
+            err,
+          );
+        }
       }
 
       busyRef.current = false;
@@ -155,8 +271,8 @@ export default function ScannerOcr({ onExtract }: Props) {
             </h2>
 
             <p className="mt-1 text-sm text-slate-600">
-              Fotografía la etiqueta completa para
-              extraer IMEI 1, IMEI 2 y S/N.
+              Fotografía la etiqueta SUNMI completa
+              para extraer IMEI 1, IMEI 2 y S/N.
             </p>
           </div>
         </div>
@@ -209,18 +325,21 @@ export default function ScannerOcr({ onExtract }: Props) {
         </div>
 
         {loading && (
-          <div role="status" className="space-y-2">
+          <div
+            role="status"
+            className="space-y-2 rounded-lg bg-white p-3"
+          >
             <div className="flex items-center gap-2 text-sm text-slate-600">
               <LoaderCircle
                 size={18}
                 className="animate-spin"
               />
-              Reconociendo texto...
+              {status}
             </div>
 
             <div className="h-2 overflow-hidden rounded-full bg-slate-200">
               <div
-                className="h-full bg-blue-600"
+                className="h-full bg-blue-600 transition-all"
                 style={{ width: `${progress}%` }}
               />
             </div>
@@ -229,6 +348,15 @@ export default function ScannerOcr({ onExtract }: Props) {
               {progress}%
             </p>
           </div>
+        )}
+
+        {!loading && status && !error && (
+          <p
+            role="status"
+            className="rounded-lg bg-green-50 p-3 text-sm text-green-800"
+          >
+            {status}
+          </p>
         )}
 
         {error && (
@@ -244,7 +372,9 @@ export default function ScannerOcr({ onExtract }: Props) {
           <div className="space-y-2">
             <button
               type="button"
-              onClick={() => setShowRawText((value) => !value)}
+              onClick={() =>
+                setShowRawText((previous) => !previous)
+              }
               className="text-sm font-medium text-blue-700 underline"
             >
               {showRawText
@@ -253,12 +383,18 @@ export default function ScannerOcr({ onExtract }: Props) {
             </button>
 
             {showRawText && (
-              <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-white p-3 text-xs text-slate-700">
+              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-white p-3 text-xs text-slate-700">
                 {rawText}
               </pre>
             )}
           </div>
         )}
+
+        <p className="text-xs text-slate-500">
+          El OCR procesa la imagen en tu navegador.
+          Los identificadores deben revisarse
+          contra la etiqueta física antes de guardar.
+        </p>
       </section>
 
       <OcrConfirmModal
