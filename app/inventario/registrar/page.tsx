@@ -3,69 +3,116 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+
 import ScannerPos from '@/components/scanner/scanner-pos';
 import ScannerImagen from '@/components/scanner/scanner-imagen';
 
+type ScanField = 'imei1' | 'imei2' | 'sn';
+
 type ExistingDevice = {
   internalCode: string;
+  serialNumber: string | null;
+  imei: string | null;
+  imei2: string | null;
   status: string;
   model: {
     brand: string;
     model: string;
   };
-  currentLocation: {
-    name: string;
-  };
+};
+
+const fieldLabels: Record<ScanField, string> = {
+  imei1: 'IMEI 1',
+  imei2: 'IMEI 2',
+  sn: 'S/N',
 };
 
 export default function RegistrarPosPage() {
   const router = useRouter();
 
-  const [serialNumber, setSerialNumber] = useState('');
+  const [target, setTarget] = useState<ScanField>('imei1');
   const [imei, setImei] = useState('');
-  const [brand, setBrand] = useState('');
-  const [model, setModel] = useState('');
-  const [notes, setNotes] = useState('');
+  const [imei2, setImei2] = useState('');
+  const [serialNumber, setSerialNumber] = useState('');
 
-  const [existing, setExisting] =
-    useState<ExistingDevice | null>(null);
+  const [brand, setBrand] = useState('SUNMI');
+  const [model, setModel] = useState('V2s / T5940');
+  const [notes, setNotes] = useState('');
 
   const [checking, setChecking] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState('');
+  const [existing, setExisting] =
+    useState<ExistingDevice | null>(null);
   const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
 
-  async function checkDuplicate(code: string) {
-    const serial = code.trim();
+  const fieldsRef = useRef({ imei, imei2, serialNumber });
+  fieldsRef.current = { imei, imei2, serialNumber };
+
+  function handleScan(value: string) {
+    const code = value.trim();
+
+    setError('');
+    setMessage('');
+    setExisting(null);
+
+    if (target === 'imei1') {
+      if (!/^\d{15}$/.test(code)) {
+        setError('IMEI 1 debe contener 15 dígitos.');
+        return;
+      }
+      setImei(code);
+      setTarget('imei2');
+    } else if (target === 'imei2') {
+      if (!/^\d{15}$/.test(code)) {
+        setError('IMEI 2 debe contener 15 dígitos.');
+        return;
+      }
+      setImei2(code);
+      setTarget('sn');
+    } else {
+      if (!code || code.length > 100) {
+        setError('El número de serie no es válido.');
+        return;
+      }
+      setSerialNumber(code);
+    }
+
+    setMessage(`${fieldLabels[target]} capturado correctamente.`);
+  }
+
+  async function checkDuplicates() {
+    setChecking(true);
+    setError('');
     setExisting(null);
     setMessage('');
-    setError('');
-
-    if (!serial) return;
-
-    setChecking(true);
 
     try {
+      const params = new URLSearchParams({
+        serial: serialNumber.trim(),
+        imei: imei.trim(),
+        imei2: imei2.trim(),
+      });
+
       const response = await fetch(
-        `/api/devices?serial=${encodeURIComponent(serial)}`,
+        `/api/devices?${params.toString()}`,
         { cache: 'no-store' },
       );
 
-      const data = await response.json();
+      const result = await response.json();
 
       if (!response.ok) {
         throw new Error(
-          data.error ?? 'No se pudo verificar el código',
+          result.error ?? 'No se pudo comprobar el equipo',
         );
       }
 
-      if (data.exists) {
-        setExisting(data.device);
+      if (result.exists) {
+        setExisting(result.device);
+        setError('Este POS ya existe en el inventario.');
       } else {
-        setMessage(
-          'Serie disponible. Completa los datos del POS.',
-        );
+        setMessage('Los tres identificadores están disponibles.');
       }
     } catch (err) {
       setError(
@@ -80,21 +127,23 @@ export default function RegistrarPosPage() {
 
   async function saveDevice(event: React.FormEvent) {
     event.preventDefault();
-    setError('');
-    setMessage('');
-
-    if (existing || checking || saving) return;
+    if (checking || saving || existing) return;
 
     setSaving(true);
+    setError('');
+    setMessage('');
 
     try {
       const response = await fetch('/api/devices', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+        },
         credentials: 'same-origin',
         body: JSON.stringify({
           serialNumber: serialNumber.trim(),
           imei: imei.trim(),
+          imei2: imei2.trim(),
           brand: brand.trim(),
           model: model.trim(),
           notes: notes.trim(),
@@ -110,14 +159,14 @@ export default function RegistrarPosPage() {
       }
 
       setMessage(
-        `POS registrado: ${result.device.internalCode}`,
+        `Dispositivo registrado: ${result.device.internalCode}`,
       );
 
-      setSerialNumber('');
       setImei('');
-      setBrand('');
-      setModel('');
+      setImei2('');
+      setSerialNumber('');
       setNotes('');
+      setTarget('imei1');
       setExisting(null);
 
       router.refresh();
@@ -132,6 +181,14 @@ export default function RegistrarPosPage() {
     }
   }
 
+  const valid =
+    /^\d{15}$/.test(imei) &&
+    /^\d{15}$/.test(imei2) &&
+    imei !== imei2 &&
+    serialNumber.trim().length > 0 &&
+    brand.trim().length > 0 &&
+    model.trim().length > 0;
+
   return (
     <main className="min-h-screen bg-slate-50 p-4 text-slate-900 md:p-8">
       <div className="mx-auto max-w-xl space-y-6">
@@ -143,13 +200,13 @@ export default function RegistrarPosPage() {
             ← Volver al inventario
           </Link>
 
-          <h1 className="mt-3 text-2xl font-bold">
+          <h1 className="mt-4 text-2xl font-bold">
             Registrar dispositivo POS
           </h1>
 
-          <p className="mt-2 text-sm text-slate-500">
-            Escanea la etiqueta original del fabricante.
-            El código se utilizará como número de serie.
+          <p className="mt-2 text-sm text-slate-600">
+            Escanea IMEI 1, IMEI 2 y S/N de la etiqueta
+            del fabricante.
           </p>
         </header>
 
@@ -157,58 +214,126 @@ export default function RegistrarPosPage() {
           onSubmit={saveDevice}
           className="space-y-5 rounded-xl border bg-white p-5 shadow-sm"
         >
-          <ScannerPos
-            onScan={(code) => {
-                setSerialNumber(code);
-                void checkDuplicate(code);
-            }}
+          <div className="space-y-3">
+            <h2 className="font-semibold">
+              1. Selecciona el código para escanear
+            </h2>
+
+            {(
+              [
+                ['imei1', 'IMEI 1', imei],
+                ['imei2', 'IMEI 2', imei2],
+                ['sn', 'S/N', serialNumber],
+              ] as const
+            ).map(([field, label, value]) => (
+              <button
+                type="button"
+                key={field}
+                onClick={() => setTarget(field)}
+                className={`w-full rounded-lg border p-3 text-left ${
+                  target === field
+                    ? 'border-blue-600 bg-blue-50'
+                    : 'border-slate-200'
+                }`}
+              >
+                <span className="flex items-center justify-between">
+                  <span className="font-semibold">{label}</span>
+                  <span className="text-sm">
+                    {value ? '✓ Capturado' : 'Pendiente'}
+                  </span>
+                </span>
+                <span className="mt-1 block break-all text-sm text-slate-600">
+                  {value || 'Pulsa para seleccionar'}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          <div className="space-y-3 rounded-lg bg-slate-50 p-3">
+            <p className="text-sm font-medium">
+              Código seleccionado: {fieldLabels[target]}
+            </p>
+
+            <ScannerPos
+              onScan={handleScan}
+              label={fieldLabels[target]}
             />
 
-            <ScannerImagen
-            onScan={(code) => {
-                setSerialNumber(code);
-                void checkDuplicate(code);
-            }}
-            />
+            <ScannerImagen onScan={handleScan} />
+          </div>
+
+          <h2 className="font-semibold">
+            2. Verifica los identificadores
+          </h2>
 
           <div className="space-y-2">
-            <label
-              htmlFor="serialNumber"
-              className="block text-sm font-medium"
-            >
-              Número de serie del fabricante *
+            <label htmlFor="imei1" className="text-sm font-medium">
+              IMEI 1 *
             </label>
-
             <input
-              id="serialNumber"
+              id="imei1"
+              inputMode="numeric"
+              maxLength={15}
               required
-              maxLength={100}
-              value={serialNumber}
-              onChange={(event) => {
-                setSerialNumber(event.target.value);
+              value={imei}
+              onChange={(e) => {
+                setImei(e.target.value);
                 setExisting(null);
-                setMessage('');
               }}
-              onBlur={() => {
-                if (serialNumber.trim()) {
-                  void checkDuplicate(serialNumber);
-                }
-              }}
-              placeholder="Escanea o escribe el número de serie"
               className="w-full rounded-lg border p-3"
             />
           </div>
 
-          {checking && (
-            <p className="text-sm text-slate-500">
-              Buscando dispositivo...
-            </p>
-          )}
+          <div className="space-y-2">
+            <label htmlFor="imei2" className="text-sm font-medium">
+              IMEI 2 *
+            </label>
+            <input
+              id="imei2"
+              inputMode="numeric"
+              maxLength={15}
+              required
+              value={imei2}
+              onChange={(e) => {
+                setImei2(e.target.value);
+                setExisting(null);
+              }}
+              className="w-full rounded-lg border p-3"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <label htmlFor="serial" className="text-sm font-medium">
+              S/N *
+            </label>
+            <input
+              id="serial"
+              required
+              maxLength={100}
+              value={serialNumber}
+              onChange={(e) => {
+                setSerialNumber(e.target.value);
+                setExisting(null);
+              }}
+              className="w-full rounded-lg border p-3"
+            />
+          </div>
+
+          <button
+            type="button"
+            disabled={!valid || checking}
+            onClick={() => void checkDuplicates()}
+            className="w-full rounded-lg border border-blue-600 p-3 font-medium text-blue-700 disabled:opacity-50"
+          >
+            {checking
+              ? 'Comprobando...'
+              : 'Comprobar si el POS ya está registrado'}
+          </button>
 
           {existing && (
-            <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+            <div className="rounded-lg bg-amber-50 p-4 text-sm text-amber-900">
               <p className="font-semibold">
-                Este dispositivo ya está registrado.
+                Este dispositivo ya existe.
               </p>
               <p>Código: {existing.internalCode}</p>
               <p>
@@ -216,90 +341,56 @@ export default function RegistrarPosPage() {
                 {existing.model.model}
               </p>
               <p>Estado: {existing.status}</p>
-              <p>
-                Ubicación: {existing.currentLocation.name}
-              </p>
             </div>
           )}
 
-          <div className="space-y-2">
-            <label
-              htmlFor="imei"
-              className="block text-sm font-medium"
-            >
-              IMEI (opcional, 15 dígitos)
-            </label>
-
-            <input
-              id="imei"
-              value={imei}
-              onChange={(e) => setImei(e.target.value)}
-              inputMode="numeric"
-              maxLength={15}
-              className="w-full rounded-lg border p-3"
-            />
-          </div>
+          <h2 className="font-semibold">
+            3. Información del dispositivo
+          </h2>
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
-              <label
-                htmlFor="brand"
-                className="block text-sm font-medium"
-              >
+              <label htmlFor="brand" className="text-sm font-medium">
                 Marca *
               </label>
-
               <input
                 id="brand"
                 required
-                maxLength={100}
                 value={brand}
                 onChange={(e) => setBrand(e.target.value)}
-                placeholder="PAX"
                 className="w-full rounded-lg border p-3"
               />
             </div>
 
             <div className="space-y-2">
-              <label
-                htmlFor="model"
-                className="block text-sm font-medium"
-              >
+              <label htmlFor="model" className="text-sm font-medium">
                 Modelo *
               </label>
-
               <input
                 id="model"
                 required
-                maxLength={100}
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
-                placeholder="A920"
                 className="w-full rounded-lg border p-3"
               />
             </div>
           </div>
 
           <div className="space-y-2">
-            <label
-              htmlFor="notes"
-              className="block text-sm font-medium"
-            >
+            <label htmlFor="notes" className="text-sm font-medium">
               Observaciones
             </label>
-
             <textarea
               id="notes"
+              rows={3}
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              maxLength={1000}
-              rows={3}
               className="w-full rounded-lg border p-3"
             />
           </div>
 
           <div className="rounded-lg bg-blue-50 p-3 text-sm text-blue-800">
-            Ubicación inicial: ALM-001 — Almacén principal
+            Ubicación inicial: ALM-001
           </div>
 
           {error && (
@@ -316,15 +407,10 @@ export default function RegistrarPosPage() {
 
           <button
             type="submit"
-            disabled={
-              saving ||
-              checking ||
-              Boolean(existing) ||
-              !serialNumber.trim()
-            }
-            className="w-full rounded-lg bg-blue-600 px-4 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!valid || checking || saving || !!existing}
+            className="w-full rounded-lg bg-blue-600 p-3 font-semibold text-white disabled:opacity-50"
           >
-            {saving ? 'Registrando...' : 'Registrar POS'}
+            {saving ? 'Guardando...' : 'Registrar POS'}
           </button>
         </form>
       </div>

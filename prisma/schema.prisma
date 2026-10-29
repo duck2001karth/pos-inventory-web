@@ -95,8 +95,9 @@ model Device {
   id                String       @id @default(cuid())
   internalCode      String       @unique
   serialNumber      String?      @unique
-  imei              String?      @unique
   status            DeviceStatus @default(IN_STOCK)
+  imei              String? @unique
+  imei2             String? @unique
   modelId           String
   currentLocationId String
   notes             String?
