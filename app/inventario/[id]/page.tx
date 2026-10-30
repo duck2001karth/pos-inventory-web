@@ -1,0 +1,159 @@
+
+import { Suspense } from 'react';
+import Link from 'next/link';
+import { notFound } from 'next/navigation';
+import { ArrowLeft, Package } from 'lucide-react';
+
+import { prisma } from '@/lib/prisma';
+import StatusBadge from '@/components/ui/status-badge';
+
+type Props = {
+  params: Promise<{
+    id: string;
+  }>;
+};
+
+async function DeviceDetails({
+  params,
+}: Props) {
+  const { id } = await params;
+
+  const device = await prisma.device.findUnique({
+    where: { id },
+
+    select: {
+      id: true,
+      internalCode: true,
+      serialNumber: true,
+      imei: true,
+      imei2: true,
+      status: true,
+      notes: true,
+
+      model: {
+        select: {
+          brand: true,
+          model: true,
+        },
+      },
+
+      currentLocation: {
+        select: {
+          name: true,
+          code: true,
+        },
+      },
+    },
+  });
+
+  if (!device) {
+    notFound();
+  }
+
+  const information = [
+    ['Código interno', device.internalCode],
+    ['Marca', device.model.brand],
+    ['Modelo', device.model.model],
+    ['Número de serie', device.serialNumber ?? '—'],
+    ['IMEI 1', device.imei ?? '—'],
+    ['IMEI 2', device.imei2 ?? 'No aplica'],
+    [
+      'Almacén / ubicación',
+      device.currentLocation
+        ? `${device.currentLocation.name} (${device.currentLocation.code})`
+        : 'Sin ubicación',
+    ],
+    ['Observaciones', device.notes ?? 'Sin observaciones'],
+  ];
+
+  return (
+    <main className="min-h-screen bg-slate-50 p-4 md:p-8">
+      <div className="mx-auto max-w-4xl space-y-6">
+        <Link
+          href="/inventario"
+          className="inline-flex items-center gap-2 text-sm font-semibold text-blue-600"
+        >
+          <ArrowLeft size={18} />
+          Volver al inventario
+        </Link>
+
+        <header className="rounded-2xl border bg-white p-6">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className="rounded-xl bg-blue-50 p-3 text-blue-600">
+                <Package size={26} />
+              </div>
+
+              <div className="min-w-0">
+                <p className="text-sm text-slate-500">
+                  Ficha del dispositivo
+                </p>
+
+                <h1 className="mt-1 break-all text-xl font-bold text-slate-900 md:text-2xl">
+                  {device.internalCode}
+                </h1>
+
+                <p className="mt-2 text-sm text-slate-600">
+                  {device.model.brand} {device.model.model}
+                </p>
+              </div>
+            </div>
+
+            <StatusBadge status={device.status} />
+          </div>
+        </header>
+
+        <section className="overflow-hidden rounded-2xl border bg-white">
+          <h2 className="border-b px-6 py-4 text-lg font-bold">
+            Identificación y ubicación
+          </h2>
+
+          <dl className="grid gap-5 p-6 sm:grid-cols-2">
+            {information.map(([label, value]) => (
+              <div
+                key={label}
+                className="min-w-0 space-y-1"
+              >
+                <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  {label}
+                </dt>
+
+                <dd className="break-all text-sm font-medium text-slate-900">
+                  {value}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+
+        <section className="rounded-2xl border bg-white p-6">
+          <h2 className="text-lg font-bold text-slate-900">
+            Historial de movimientos
+          </h2>
+
+          <p className="mt-2 text-sm text-slate-500">
+            En la siguiente entrega conectaremos los
+            movimientos existentes y la auditoría
+            de este dispositivo.
+          </p>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+export default function DevicePage({
+  params,
+}: Props) {
+  return (
+    <Suspense
+      fallback={
+        <div className="p-8 text-sm text-slate-500">
+          Cargando dispositivo...
+        </div>
+      }
+    >
+      <DeviceDetails params={params} />
+    </Suspense>
+  );
+}
