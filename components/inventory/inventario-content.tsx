@@ -60,7 +60,7 @@ export default async function InventoryContent({ searchParams }: Props) {
         {canExport && <a href={`/api/reports/inventory${exportParams.size ? `?${exportParams}` : ''}`} className="inline-flex items-center gap-2 rounded-xl border border-[var(--app-border)] px-4 py-2.5 text-sm font-semibold text-[var(--app-fg)] transition hover:bg-[var(--app-hover)]"><Download size={18}/> Exportar Excel</a>}
       </div>
       <div className="px-4 py-3 sm:px-6"><InventoryFilters key={JSON.stringify(filters)} initial={filters}/></div>
-      <div className="px-4 pb-4 sm:px-6"><InventoryTable devices={devices}/></div>
+      <div className="px-4 pb-4 sm:px-6"><InventoryTable devices={devices} canMove={canExport}/></div>
       <nav aria-label="Paginación" className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--app-border)] px-4 py-4 text-sm sm:px-6"><span className="text-[var(--app-muted)]">Página {page} de {totalPages} · {matches} dispositivos</span><div className="flex gap-2">
         {page > 1 ? <Link className="app-icon-button !w-auto gap-1 px-3" href={inventoryUrl(filters,page-1)}><ChevronLeft size={16}/> Anterior</Link> : <span className="app-icon-button !w-auto cursor-default gap-1 px-3 opacity-40"><ChevronLeft size={16}/>Anterior</span>}
         {page < totalPages ? <Link className="app-icon-button !w-auto gap-1 px-3" href={inventoryUrl(filters,page+1)}>Siguiente <ChevronRight size={16}/></Link> : <span className="app-icon-button !w-auto cursor-default gap-1 px-3 opacity-40">Siguiente <ChevronRight size={16}/></span>}

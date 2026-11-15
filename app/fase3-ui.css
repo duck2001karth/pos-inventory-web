@@ -1,0 +1,5 @@
+/* Importar desde app/globals.css al final, solo si se desea el refinamiento adicional. */
+:root { --app-content-gutter: clamp(12px, 1.7vw, 28px); }
+.app-page { width: 100%; min-width: 0; padding-inline: var(--app-content-gutter); }
+.app-page-content { width: 100%; max-width: none; }
+@media (min-width: 1280px) { .app-dashboard-metrics { grid-template-columns: repeat(4, minmax(0,1fr)); } }
