@@ -11,7 +11,7 @@ import {
   Warehouse,
 } from 'lucide-react';
 
-// Tipo reutilizable para cada opción del menú.
+
 export type NavigationItem = {
   label: string;
   href: string;
@@ -19,13 +19,11 @@ export type NavigationItem = {
   enabled: boolean;
 };
 
-// Tipo reutilizable para los grupos del sidebar.
 export type NavigationGroup = {
   title: string;
   items: NavigationItem[];
 };
 
-// Navegación principal de POS Control.
 export const navigationGroups: NavigationGroup[] = [
   {
     title: 'General',
@@ -86,7 +84,6 @@ export const navigationGroups: NavigationGroup[] = [
   },
 ];
 
-// Determina qué opción debe aparecer activa.
 export function isNavigationActive(
   pathname: string,
   href: string,
