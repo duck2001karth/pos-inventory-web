@@ -6,8 +6,25 @@ import { RotateCcw, SlidersHorizontal } from 'lucide-react';
 
 import type { ReportFilters } from '@/lib/services/report-service';
 
-type Option = { id: string; name: string; code?: string; brand?: string; model?: string };
-type Props = { initial: ReportFilters; locations: Option[]; models: Option[] };
+
+type LocationOption = {
+  id: string;
+  code: string;
+  name: string;
+};
+
+type ModelOption = {
+  id: string;
+  brand: string;
+  model: string;
+};
+
+type Props = {
+  initial: ReportFilters;
+  locations: LocationOption[];
+  models: ModelOption[];
+};
+
 const statuses = [
   ['IN_STOCK', 'En almacén'], ['ASSIGNED', 'Asignado'], ['IN_TRANSIT', 'En tránsito'],
   ['IN_REPAIR', 'En reparación'], ['RETIRED', 'Retirado'], ['LOST', 'Extraviado'],
