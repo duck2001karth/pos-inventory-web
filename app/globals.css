@@ -1,8 +1,25 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --app-bg: #f5f7fb;
+  --app-surface: #ffffff;
+  --app-fg: #101c33;
+  --app-muted: #64748b;
+  --app-border: #e2e8f0;
+  --app-hover: #eff4fb;
+  --background: var(--app-bg);
+  --foreground: var(--app-fg);
+}
+
+:root[data-theme="dark"] {
+  --app-bg: #0b1220;
+  --app-surface: #141f32;
+  --app-fg: #edf3fd;
+  --app-muted: #9aadc5;
+  --app-border: #2b3b50;
+  --app-hover: #203048;
 }
 
 @theme inline {
@@ -12,15 +29,30 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--app-bg);
+  color: var(--app-fg);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Compatibilidad temporal para las pantallas antiguas: al migrar un
+   componente se recomienda sustituir estos estilos por tokens semánticos. */
+:root[data-theme="dark"] .bg-white { background-color: var(--app-surface); }
+:root[data-theme="dark"] .bg-slate-50 { background-color: var(--app-bg); }
+:root[data-theme="dark"] .bg-slate-100 { background-color: var(--app-hover); }
+:root[data-theme="dark"] .border-slate-200,
+:root[data-theme="dark"] .border-slate-100 { border-color: var(--app-border); }
+:root[data-theme="dark"] .text-slate-900,
+:root[data-theme="dark"] .text-slate-800,
+:root[data-theme="dark"] .text-slate-700 { color: var(--app-fg); }
+:root[data-theme="dark"] .text-slate-600,
+:root[data-theme="dark"] .text-slate-500 { color: var(--app-muted); }
+:root[data-theme="dark"] input:not([type="checkbox"]),
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] textarea {
+  color: var(--app-fg);
+  background-color: var(--app-surface);
+  border-color: var(--app-border);
+}
+:root[data-theme="dark"] input::placeholder,
+:root[data-theme="dark"] textarea::placeholder { color: var(--app-muted); }
