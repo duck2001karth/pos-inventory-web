@@ -1,0 +1,11 @@
+@page { size: A4; margin: 14mm; }
+
+@media print {
+  body:has(.reports-print-page) { background: #ffffff !important; color: #172238 !important; }
+  body:has(.reports-print-page) aside[aria-label="Menú principal"],
+  body:has(.reports-print-page) header.sticky { display: none !important; }
+  body:has(.reports-print-page) div[class*="lg:pl-"] { padding-left: 0 !important; }
+  .reports-print-page { background: #ffffff !important; color: #172238 !important; padding: 0 !important; }
+  .reports-print-page section { break-inside: avoid-page; }
+  .reports-print-page .app-panel { border: 1px solid #d9dee7 !important; box-shadow: none !important; background: white !important; }
+}
