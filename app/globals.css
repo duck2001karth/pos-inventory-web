@@ -1,4 +1,5 @@
 @import "tailwindcss";
+
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 :root {
@@ -8,13 +9,18 @@
   --app-muted: #718096;
   --app-border: #e8eaf0;
   --app-hover: #f2f4f8;
+
+  /* Identidad corporativa POS Control */
   --app-accent: #e94c62;
   --app-accent-soft: #fff1f3;
+  --app-accent-hover: #d83d54;
+
   --app-sidebar: #ffffff;
   --app-sidebar-fg: #354159;
   --background: var(--app-bg);
   --foreground: var(--app-fg);
 }
+
 :root[data-theme="dark"] {
   --app-bg: #111722;
   --app-surface: #1a2331;
@@ -22,27 +28,96 @@
   --app-muted: #a1aec2;
   --app-border: #303d4f;
   --app-hover: #273446;
+
   --app-accent: #ff7888;
   --app-accent-soft: #402934;
+  --app-accent-hover: #ed6276;
+
   --app-sidebar: #182130;
   --app-sidebar-fg: #e6edf6;
 }
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
+
 html { color-scheme: light; }
-body { background: var(--app-bg); color: var(--app-fg); font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
-.app-icon-button { display: inline-flex; width: 40px; height: 40px; align-items: center; justify-content: center; border: 1px solid var(--app-border); border-radius: 12px; background: var(--app-surface); color: var(--app-fg); transition: background .15s ease, transform .15s ease; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
+body {
+  background: var(--app-bg);
+  color: var(--app-fg);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Componentes semánticos compartidos */
+.app-icon-button {
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--app-border);
+  border-radius: 12px;
+  background: var(--app-surface);
+  color: var(--app-fg);
+  transition: background .15s ease, transform .15s ease;
+}
 .app-icon-button:hover { background: var(--app-hover); transform: translateY(-1px); }
-.app-panel { background: var(--app-surface); border: 1px solid var(--app-border); box-shadow: 0 4px 22px rgba(18,29,51,.035); border-radius: 20px; }
-.app-field { background: var(--app-surface); border: 1px solid var(--app-border); border-radius: 12px; color: var(--app-fg); padding: 11px 13px; min-width: 0; }
-.app-field:focus { outline: 2px solid color-mix(in srgb, var(--app-accent) 38%, transparent); outline-offset: 1px; }
-.app-primary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: #e94c62; color: white; border-radius: 12px; padding: 11px 18px; font-size: 14px; font-weight: 650; transition: background .15s ease; }
+
+.app-panel {
+  background: var(--app-surface);
+  color: var(--app-fg);
+  border: 1px solid var(--app-border);
+  box-shadow: 0 4px 22px rgba(18,29,51,.035);
+  border-radius: 20px;
+}
+
+.app-field {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 11px 13px;
+  border: 1px solid var(--app-border);
+  border-radius: 12px;
+  background: var(--app-surface);
+  color: var(--app-fg);
+  font-size: 16px;
+}
+.app-field::placeholder { color: var(--app-muted); opacity: .85; }
+.app-field:focus {
+  outline: 2px solid color-mix(in srgb, var(--app-accent) 38%, transparent);
+  outline-offset: 1px;
+}
+.app-field:disabled { opacity: .6; cursor: not-allowed; }
+
+.app-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  padding: 11px 18px;
+  background: #e94c62;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 650;
+  transition: background .15s ease;
+}
 .app-primary:hover { background: #d83d54; }
-/* Legacy Tailwind utilities: transitional coverage for older screens and modals. */
+.app-primary:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--app-accent) 45%, transparent);
+  outline-offset: 2px;
+}
+:root[data-theme="dark"] .app-primary { background: #d94a61; }
+:root[data-theme="dark"] .app-primary:hover { background: #ec6075; }
+
+/* Compatibilidad con componentes antiguos. Es una capa provisional. */
 :root[data-theme="dark"] .bg-white { background-color: var(--app-surface); }
 :root[data-theme="dark"] .bg-slate-50 { background-color: var(--app-bg); }
 :root[data-theme="dark"] .bg-slate-100 { background-color: var(--app-hover); }
@@ -54,9 +129,32 @@ body { background: var(--app-bg); color: var(--app-fg); font-family: Inter, ui-s
 :root[data-theme="dark"] .text-slate-700 { color: var(--app-fg); }
 :root[data-theme="dark"] .text-slate-600,
 :root[data-theme="dark"] .text-slate-500 { color: var(--app-muted); }
-:root[data-theme="dark"] input:not([type="checkbox"]),
+:root[data-theme="dark"] input:not([type="checkbox"]):not([type="radio"]),
 :root[data-theme="dark"] select,
-:root[data-theme="dark"] textarea { background-color: var(--app-surface); color: var(--app-fg); border-color: var(--app-border); }
+:root[data-theme="dark"] textarea {
+  background-color: var(--app-surface);
+  color: var(--app-fg);
+  border-color: var(--app-border);
+}
 :root[data-theme="dark"] input::placeholder,
 :root[data-theme="dark"] textarea::placeholder { color: var(--app-muted); }
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }
+
+/* El OCR antiguo utiliza clases azules: adaptación sin tocar Tesseract. */
+.corporate-ocr [class~="bg-blue-600"] { background-color: #e94c62; }
+.corporate-ocr [class~="text-blue-600"],
+.corporate-ocr [class~="text-blue-700"] { color: var(--app-accent); }
+.corporate-ocr [class~="border-blue-600"],
+.corporate-ocr [class~="border-blue-200"] { border-color: color-mix(in srgb, var(--app-accent) 37%, var(--app-border)); }
+.corporate-ocr [class~="bg-blue-50"],
+.corporate-ocr [class~="bg-blue-50/40"],
+.corporate-ocr [class~="bg-blue-100"] { background-color: var(--app-accent-soft); }
+.corporate-ocr [class~="text-blue-800"] { color: var(--app-fg); }
+.corporate-ocr [class~="hover:bg-blue-700"]:hover { background-color: #d83d54; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+  }
+}
