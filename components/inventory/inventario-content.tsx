@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { ChevronLeft, ChevronRight, Download, Plus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, Plus, Warehouse, Smartphone, PackageCheck, Wrench, MessageSquareText, CheckCircle2 } from 'lucide-react';
 import { requireUser } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { INVENTORY_PAGE_SIZE, inventorySelect, inventoryWhere, inventoryUrl, parseInventoryFilters } from '@/lib/services/inventory-query';
@@ -8,13 +8,23 @@ import InventoryFilters from '@/components/inventory/list/inventory-filters';
 import InventoryTable from '@/components/inventory/list/inventory-table';
 
 type Props = { searchParams: Promise<Record<string, string | string[] | undefined>> };
+
+const metrics = [
+  { label: 'Total de POS', icon: Smartphone, tint: 'bg-rose-50 text-rose-500 dark:bg-rose-500/10' },
+  { label: 'En almacén', icon: Warehouse, tint: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10' },
+  { label: 'Asignados', icon: PackageCheck, tint: 'bg-violet-50 text-violet-600 dark:bg-violet-500/10' },
+  { label: 'En reparación', icon: Wrench, tint: 'bg-amber-50 text-amber-600 dark:bg-amber-500/10' },
+  { label: 'Con observaciones', icon: MessageSquareText, tint: 'bg-orange-50 text-orange-600 dark:bg-orange-500/10' },
+  { label: 'Sin observaciones', icon: CheckCircle2, tint: 'bg-sky-50 text-sky-600 dark:bg-sky-500/10' },
+];
+
 export default async function InventoryContent({ searchParams }: Props) {
   const user = await requireUser();
   const params = await searchParams;
   const filters = parseInventoryFilters(params);
   const rawPage = Array.isArray(params.page) ? params.page[0] : params.page;
-  const parsedPage = Number(rawPage ?? 1);
-  const requestedPage = Number.isSafeInteger(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+  const n = Number(rawPage ?? 1);
+  const requestedPage = Number.isSafeInteger(n) && n > 0 ? n : 1;
   const where = inventoryWhere(filters);
   const [total, inStock, assigned, inRepair, withNotes, withoutNotes, matches] = await Promise.all([
     prisma.device.count(),
@@ -35,9 +45,26 @@ export default async function InventoryContent({ searchParams }: Props) {
   if (filters.model) exportParams.set('model', filters.model);
   if (filters.status) exportParams.set('status', filters.status);
   if (filters.observations !== 'all') exportParams.set('observations', filters.observations);
-  return <main className="mx-auto max-w-7xl space-y-6 p-4 pb-12 text-slate-900 md:p-8">
-    <header className="flex flex-wrap items-center justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-widest text-blue-600">Sistema de inventario POS</p><h1 className="mt-2 text-2xl font-bold md:text-3xl">Inventario de dispositivos</h1><p className="mt-1 text-sm text-slate-500">Busca, filtra y consulta cada equipo SUNMI.</p></div><Link href="/inventario/registrar" className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white"><Plus size={18}/>Registrar POS</Link></header>
-    <section className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">{([['Total de POS',total],['En almacén',inStock],['Asignados',assigned],['En reparación',inRepair],['Con observaciones',withNotes],['Sin observaciones',withoutNotes]] as const).map(([name,count]) => <div key={name} className="rounded-xl border bg-white p-4 shadow-sm"><p className="text-xs text-slate-500">{name}</p><p className="mt-2 text-2xl font-bold">{count}</p></div>)}</section>
-    <section className="space-y-4 rounded-2xl border bg-white p-4 shadow-sm md:p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">Dispositivos registrados</h2><p className="text-sm text-slate-500">{matches} resultado(s)</p></div>{canExport && <a href={`/api/reports/inventory${exportParams.size ? `?${exportParams}` : ''}`} className="inline-flex items-center gap-2 rounded-xl border border-emerald-600 px-4 py-2.5 text-sm font-semibold text-emerald-700"><Download size={18}/>Exportar Excel</a>}</div><InventoryFilters key={JSON.stringify(filters)} initial={filters}/><InventoryTable devices={devices}/><nav aria-label="Paginación" className="flex flex-wrap items-center justify-between gap-2 border-t pt-4 text-sm"><span className="text-slate-500">Página {page} de {totalPages} · {INVENTORY_PAGE_SIZE} por página</span><div className="flex gap-2">{page > 1 ? <Link className="rounded-lg border px-3 py-2" href={inventoryUrl(filters,page-1)}><ChevronLeft size={16} className="inline"/> Anterior</Link> : <span className="rounded-lg border px-3 py-2 text-slate-400">Anterior</span>}{page < totalPages ? <Link className="rounded-lg border px-3 py-2" href={inventoryUrl(filters,page+1)}>Siguiente <ChevronRight size={16} className="inline"/></Link> : <span className="rounded-lg border px-3 py-2 text-slate-400">Siguiente</span>}</div></nav></section>
+  const values = [total, inStock, assigned, inRepair, withNotes, withoutNotes];
+
+  return <main className="min-w-0 space-y-6 px-4 py-6 pb-12 sm:px-6 xl:px-8">
+    <header className="flex flex-wrap items-center justify-between gap-4">
+      <div><p className="text-xs font-bold uppercase tracking-[.18em] text-[var(--app-accent)]">Control de dispositivos</p><h1 className="mt-2 text-2xl font-extrabold tracking-tight md:text-3xl">Inventario de POS</h1><p className="mt-1 text-sm text-[var(--app-muted)]">Consulta tus equipos, encuentra identificadores y filtra observaciones.</p></div>
+      <Link href="/inventario/registrar" className="app-primary"><Plus size={18}/> Nuevo dispositivo</Link>
+    </header>
+    <section aria-label="Indicadores del inventario" className="grid grid-cols-2 gap-3 md:grid-cols-3 2xl:grid-cols-6">
+      {metrics.map(({ label, icon: Icon, tint }, i) => <div key={label} className="app-panel flex min-w-0 flex-col gap-3 p-4 sm:p-5"><div className="flex items-start justify-between gap-2"><p className="text-xs font-medium text-[var(--app-muted)] sm:text-sm">{label}</p><span className={`rounded-xl p-2 ${tint}`}><Icon size={18}/></span></div><p className="text-2xl font-bold tabular-nums tracking-tight sm:text-3xl">{values[i].toLocaleString('es-BO')}</p></div>)}
+    </section>
+    <section className="app-panel min-w-0 overflow-hidden">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 pt-5 pb-3 sm:px-6"><div><h2 className="text-lg font-bold">Dispositivos registrados</h2><p className="mt-1 text-xs text-[var(--app-muted)]">{matches.toLocaleString('es-BO')} resultados coinciden con tus filtros</p></div>
+        {canExport && <a href={`/api/reports/inventory${exportParams.size ? `?${exportParams}` : ''}`} className="inline-flex items-center gap-2 rounded-xl border border-[var(--app-border)] px-4 py-2.5 text-sm font-semibold text-[var(--app-fg)] transition hover:bg-[var(--app-hover)]"><Download size={18}/> Exportar Excel</a>}
+      </div>
+      <div className="px-4 py-3 sm:px-6"><InventoryFilters key={JSON.stringify(filters)} initial={filters}/></div>
+      <div className="px-4 pb-4 sm:px-6"><InventoryTable devices={devices}/></div>
+      <nav aria-label="Paginación" className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--app-border)] px-4 py-4 text-sm sm:px-6"><span className="text-[var(--app-muted)]">Página {page} de {totalPages} · {matches} dispositivos</span><div className="flex gap-2">
+        {page > 1 ? <Link className="app-icon-button !w-auto gap-1 px-3" href={inventoryUrl(filters,page-1)}><ChevronLeft size={16}/> Anterior</Link> : <span className="app-icon-button !w-auto cursor-default gap-1 px-3 opacity-40"><ChevronLeft size={16}/>Anterior</span>}
+        {page < totalPages ? <Link className="app-icon-button !w-auto gap-1 px-3" href={inventoryUrl(filters,page+1)}>Siguiente <ChevronRight size={16}/></Link> : <span className="app-icon-button !w-auto cursor-default gap-1 px-3 opacity-40">Siguiente <ChevronRight size={16}/></span>}
+      </div></nav>
+    </section>
   </main>;
 }

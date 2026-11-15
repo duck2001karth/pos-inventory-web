@@ -1,53 +1,68 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Monitor, Moon, Sun } from 'lucide-react';
+import { Check, Monitor, Moon, Sun } from 'lucide-react';
 
 type Theme = 'light' | 'dark' | 'system';
-const STORAGE_KEY = 'pos-control-theme';
-const options: { id: Theme; title: string; icon: typeof Sun }[] = [
-  { id: 'light', title: 'Claro', icon: Sun },
-  { id: 'dark', title: 'Oscuro', icon: Moon },
-  { id: 'system', title: 'Sistema', icon: Monitor },
+const KEY = 'pos-control-theme';
+const choices = [
+  { id: 'light' as const, label: 'Claro', icon: Sun },
+  { id: 'dark' as const, label: 'Oscuro', icon: Moon },
+  { id: 'system' as const, label: 'Sistema', icon: Monitor },
 ];
 
-export default function ThemeSwitcher({ compact = false }: { compact?: boolean }) {
-  const [theme, setTheme] = useState<Theme>('system');
+function applyTheme(theme: Theme) {
+  const dark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+}
+
+export default function ThemeSwitcher() {
+  const [theme, setTheme] = useState<Theme>('light');
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
-    const saved = window.localStorage.getItem(STORAGE_KEY);
-    if (saved === 'light' || saved === 'dark' || saved === 'system') setTheme(saved);
+    const saved = localStorage.getItem(KEY);
+    const initial: Theme = saved === 'dark' || saved === 'system' ? saved : 'light';
+    setTheme(initial);
+    applyTheme(initial);
+    const query = matchMedia('(prefers-color-scheme: dark)');
+    const handle = () => {
+      const current = localStorage.getItem(KEY);
+      if (current === 'system') applyTheme('system');
+    };
+    query.addEventListener('change', handle);
+    return () => query.removeEventListener('change', handle);
   }, []);
 
-  useEffect(() => {
-    const media = window.matchMedia('(prefers-color-scheme: dark)');
-    const apply = () => {
-      document.documentElement.dataset.theme =
-        theme === 'system' ? (media.matches ? 'dark' : 'light') : theme;
-      document.documentElement.style.colorScheme = document.documentElement.dataset.theme;
-    };
-    apply();
-    media.addEventListener('change', apply);
-    window.localStorage.setItem(STORAGE_KEY, theme);
-    return () => media.removeEventListener('change', apply);
-  }, [theme]);
+  function choose(next: Theme) {
+    setTheme(next);
+    localStorage.setItem(KEY, next);
+    applyTheme(next);
+    setOpen(false);
+  }
+
+  const ActiveIcon = choices.find((c) => c.id === theme)?.icon ?? Sun;
 
   return (
-    <div aria-label="Apariencia" className={`flex gap-1 rounded-xl bg-white/5 p-1 ${compact ? 'flex-col' : ''}`}>
-      {options.map(({ id, title, icon: Icon }) => (
-        <button
-          key={id}
-          type="button"
-          aria-label={`Tema ${title.toLowerCase()}`}
-          aria-pressed={theme === id}
-          title={title}
-          onClick={() => setTheme(id)}
-          className={`flex min-w-0 flex-1 items-center justify-center gap-2 rounded-lg px-2 py-2 text-xs font-medium transition focus-visible:outline-2 focus-visible:outline-blue-400 ${theme === id ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:bg-white/10 hover:text-white'}`}
-        >
-          <Icon size={16} aria-hidden="true" />
-          {!compact && <span>{title}</span>}
-        </button>
-      ))}
+    <div className="relative">
+      <button type="button" title="Cambiar apariencia" aria-label="Cambiar apariencia" aria-haspopup="menu" aria-expanded={open}
+        onClick={() => setOpen(!open)} className="app-icon-button">
+        <ActiveIcon size={19} />
+      </button>
+      {open && (
+        <>
+          <button type="button" tabIndex={-1} aria-label="Cerrar selector de apariencia" className="fixed inset-0 z-40 cursor-default" onClick={() => setOpen(false)} />
+          <div role="menu" aria-label="Elegir apariencia" className="absolute right-0 top-full z-50 mt-2 w-44 rounded-2xl border border-[var(--app-border)] bg-[var(--app-surface)] p-1.5 shadow-xl">
+            {choices.map(({ id, label, icon: Icon }) => (
+              <button key={id} type="button" role="menuitemradio" aria-checked={theme === id} onClick={() => choose(id)}
+                className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm text-[var(--app-fg)] hover:bg-[var(--app-hover)]">
+                <Icon size={17} className="text-[var(--app-muted)]" /><span className="flex-1">{label}</span>{theme === id && <Check size={16} className="text-[var(--app-accent)]" />}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
