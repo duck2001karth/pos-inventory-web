@@ -1,0 +1,26 @@
+name: Security checks
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # URL ficticia solo para generar Prisma Client, nunca para conectar a DB.
+      DIRECT_URL: postgresql://placeholder:placeholder@localhost:5432/placeholder
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate --config prisma7.config.ts
+      - run: npx tsc --noEmit
+      - run: npx tsx --test tests/*.test.ts
+      # No ejecutamos build aquí sin las variables reales de entorno de Vercel.
