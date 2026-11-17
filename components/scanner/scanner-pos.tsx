@@ -1,414 +1,152 @@
-
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import {
-  Camera,
-  CameraOff,
-  CheckCircle2,
-  LoaderCircle,
-  ScanLine,
-} from 'lucide-react';
-
+import { createPortal } from 'react-dom';
+import { Barcode, Camera, CameraOff, CheckCircle2, LoaderCircle, ScanLine, X } from 'lucide-react';
 import type { IScannerControls } from '@zxing/browser';
 
-type ScannerPosProps = {
+type Props = {
   onScan: (code: string) => void;
   label?: string;
+  mode?: 'barcode' | 'qr';
 };
 
-export default function ScannerPos({
-  onScan,
-  label = 'código QR o de barras',
-}: ScannerPosProps) {
+export default function ScannerPos({ onScan, label = 'código de barras', mode = 'barcode' }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
-
   const streamRef = useRef<MediaStream | null>(null);
   const controlsRef = useRef<IScannerControls | null>(null);
-
   const onScanRef = useRef(onScan);
-
-  const startingRef = useRef(false);
-  const detectedRef = useRef(false);
-  const mountedRef = useRef(false);
-
-  // Permite cancelar un inicio de cámara todavía pendiente.
   const sessionRef = useRef(0);
-
-  const [active, setActive] = useState(false);
+  const openerRef = useRef<HTMLButtonElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
-
-  const [error, setError] = useState('');
   const [lastCode, setLastCode] = useState('');
-  const [cameraInfo, setCameraInfo] = useState('');
+  const [error, setError] = useState('');
 
-  useEffect(() => {
-    onScanRef.current = onScan;
-  }, [onScan]);
+  useEffect(() => { onScanRef.current = onScan; }, [onScan]);
 
-  function releaseCamera(updateState = true) {
-    // Invalida cualquier operación de apertura pendiente.
-    sessionRef.current += 1;
-
+  function stopResources() {
     controlsRef.current?.stop();
     controlsRef.current = null;
-
-    streamRef.current?.getTracks().forEach((track) => {
-      track.stop();
-    });
+    streamRef.current?.getTracks().forEach(track => track.stop());
     streamRef.current = null;
-
-    const video = videoRef.current;
-
-    if (video) {
-      video.pause();
-      video.srcObject = null;
-    }
-
-    startingRef.current = false;
-
-    if (updateState && mountedRef.current) {
-      setActive(false);
-      setLoading(false);
-      setCameraInfo('');
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.srcObject = null;
     }
   }
 
-  async function startCamera() {
-    if (startingRef.current || streamRef.current) {
-      return;
-    }
-
-    const sessionId = ++sessionRef.current;
-
-    startingRef.current = true;
-    detectedRef.current = false;
-
-    setLoading(true);
-    setActive(true);
-    setError('');
-    setLastCode('');
-    setCameraInfo('');
-
-    try {
-      if (!window.isSecureContext) {
-        throw new Error(
-          'La cámara requiere una conexión HTTPS segura.',
-        );
-      }
-
-      if (!navigator.mediaDevices?.getUserMedia) {
-        throw new Error(
-          'Este navegador no permite acceder a la cámara.',
-        );
-      }
-
-      // Solicitar primero la cámara trasera.
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: {
-          facingMode: {
-            ideal: 'environment',
-          },
-          width: {
-            ideal: 1280,
-          },
-          height: {
-            ideal: 720,
-          },
-        },
-      });
-
-      if (
-        !mountedRef.current ||
-        sessionId !== sessionRef.current
-      ) {
-        stream.getTracks().forEach((track) => track.stop());
-        return;
-      }
-
-      streamRef.current = stream;
-
-      const video = videoRef.current;
-
-      if (!video) {
-        throw new Error(
-          'No se encontró el visor de la cámara.',
-        );
-      }
-
-      // Configuración importante para Safari en iPhone.
-      video.muted = true;
-      video.autoplay = true;
-      video.playsInline = true;
-      video.srcObject = stream;
-
-      await video.play();
-
-      if (
-        !mountedRef.current ||
-        sessionId !== sessionRef.current
-      ) {
-        return;
-      }
-
-      const track = stream.getVideoTracks()[0];
-
-      if (!track || track.readyState !== 'live') {
-        throw new Error(
-          'La cámara no está transmitiendo video.',
-        );
-      }
-
-      const settings = track.getSettings();
-
-      setCameraInfo(
-        `Cámara activa: ${settings.width ?? '?'} × ${
-          settings.height ?? '?'
-        }`,
-      );
-
-      // Cargar ZXing solo después de abrir el video.
-      const { BrowserMultiFormatReader } =
-        await import('@zxing/browser');
-
-      const { BarcodeFormat, DecodeHintType } =
-        await import('@zxing/library');
-
-      const hints = new Map<
-        import('@zxing/library').DecodeHintType,
-        unknown
-      >();
-
-      hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-        BarcodeFormat.CODE_128,
-        BarcodeFormat.CODE_39,
-        BarcodeFormat.CODE_93,
-        BarcodeFormat.EAN_13,
-        BarcodeFormat.QR_CODE,
-      ]);
-
-      hints.set(DecodeHintType.TRY_HARDER, true);
-
-      const reader = new BrowserMultiFormatReader(hints, {
-        delayBetweenScanAttempts: 150,
-      });
-
-      if (
-        !mountedRef.current ||
-        sessionId !== sessionRef.current
-      ) {
-        return;
-      }
-
-      // ZXing analiza el video ya abierto.
-      const controls = await reader.decodeFromVideoElement(
-        video,
-        (result) => {
-          if (
-            !result ||
-            detectedRef.current ||
-            sessionId !== sessionRef.current
-          ) {
-            return;
-          }
-
-          const code = result.getText().trim();
-
-          if (!code) return;
-
-          detectedRef.current = true;
-
-          setLastCode(code);
-
-          // Primero detener la cámara.
-          releaseCamera();
-
-          // Después entregar el resultado al formulario.
-          onScanRef.current(code);
-        },
-      );
-
-      if (
-        sessionId !== sessionRef.current ||
-        !mountedRef.current ||
-        detectedRef.current
-      ) {
-        controls.stop();
-        return;
-      }
-
-      controlsRef.current = controls;
-    } catch (err) {
-      if (
-        !mountedRef.current ||
-        sessionId !== sessionRef.current
-      ) {
-        return;
-      }
-
-      const message =
-        err instanceof Error
-          ? `${err.name}: ${err.message}`
-          : String(err);
-
-      console.error('Error al iniciar escáner:', err);
-
-      releaseCamera();
-
-      setError(message);
-    } finally {
-      if (sessionId === sessionRef.current) {
-        startingRef.current = false;
-
-        if (mountedRef.current) {
-          setLoading(false);
-        }
-      }
-    }
+  function close() {
+    sessionRef.current += 1;
+    stopResources();
+    setOpen(false);
+    setLoading(false);
+    openerRef.current?.focus();
   }
 
   useEffect(() => {
-    mountedRef.current = true;
+    if (!open) return;
+    const original = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const request = requestAnimationFrame(() => closeRef.current?.focus());
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
+    document.addEventListener('keydown', onKeyDown);
+    return () => { document.body.style.overflow = original; cancelAnimationFrame(request); document.removeEventListener('keydown', onKeyDown); };
+  }, [open]);
 
-    return () => {
-      mountedRef.current = false;
-      releaseCamera(false);
-    };
+  useEffect(() => () => {
+    sessionRef.current += 1;
+    controlsRef.current?.stop();
+    streamRef.current?.getTracks().forEach(track => track.stop());
   }, []);
 
-  return (
-    <section className="space-y-4">
-      <button
-        type="button"
-        disabled={loading}
-        onClick={() => {
-          if (active) {
-            releaseCamera();
-          } else {
-            void startCamera();
-          }
-        }}
-        className="flex w-full items-center justify-center gap-3 rounded-xl bg-blue-600 px-4 py-4 font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {loading ? (
-          <>
-            <LoaderCircle
-              size={21}
-              className="animate-spin"
-            />
-            Iniciando cámara...
-          </>
-        ) : active ? (
-          <>
-            <CameraOff size={21} />
-            Cerrar cámara
-          </>
-        ) : (
-          <>
-            <Camera size={21} />
-            Escanear {label}
-          </>
-        )}
-      </button>
+  async function start() {
+    if (open || loading) return;
+    const token = ++sessionRef.current;
+    setOpen(true);
+    setLoading(true);
+    setError('');
+    setLastCode('');
+    try {
+      if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+        throw new Error('Para escanear necesitas HTTPS y permiso de cámara.');
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      });
+      if (token !== sessionRef.current) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
+      streamRef.current = stream;
+      const video = videoRef.current;
+      if (!video) throw new Error('No se encontró la vista de cámara.');
+      video.srcObject = stream;
+      await video.play();
+      if (token !== sessionRef.current) return;
 
-      {/* El video permanece montado para evitar
-          problemas de inicialización en Safari. */}
-      <div
-        className={`relative overflow-hidden rounded-2xl bg-black ${
-          active ? 'block' : 'hidden'
-        }`}
-      >
-        <video
-          ref={videoRef}
-          autoPlay
-          muted
-          playsInline
-          className="block aspect-[4/3] w-full object-contain"
-        />
+      const [{ BrowserMultiFormatReader }, { BarcodeFormat, DecodeHintType }] = await Promise.all([
+        import('@zxing/browser'), import('@zxing/library'),
+      ]);
+      const hints = new Map<import('@zxing/library').DecodeHintType, unknown>();
+      hints.set(DecodeHintType.POSSIBLE_FORMATS, mode === 'qr'
+        ? [BarcodeFormat.QR_CODE]
+        : [BarcodeFormat.CODE_128, BarcodeFormat.CODE_39, BarcodeFormat.CODE_93, BarcodeFormat.EAN_13, BarcodeFormat.ITF]);
+      hints.set(DecodeHintType.TRY_HARDER, true);
+      const reader = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 150 });
+      if (token !== sessionRef.current) return;
+      const controls = await reader.decodeFromVideoElement(video, result => {
+        if (!result || token !== sessionRef.current) return;
+        const value = result.getText().trim();
+        if (!value) return;
+        setLastCode(value);
+        close();
+        onScanRef.current(value);
+      });
+      if (token !== sessionRef.current) controls.stop();
+      else controlsRef.current = controls;
+    } catch (cause) {
+      if (token === sessionRef.current) {
+        setError(cause instanceof Error ? cause.message : 'No se pudo escanear.');
+        stopResources();
+      }
+    } finally {
+      if (token === sessionRef.current) setLoading(false);
+    }
+  }
 
-        {/* Guía visual para centrar el código */}
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <div className="relative h-28 w-[88%] rounded-lg border-[3px] border-white shadow-lg">
-            <div className="absolute -left-1 -top-1 h-7 w-7 rounded-tl-lg border-l-4 border-t-4 border-blue-400" />
-
-            <div className="absolute -right-1 -top-1 h-7 w-7 rounded-tr-lg border-r-4 border-t-4 border-blue-400" />
-
-            <div className="absolute -bottom-1 -left-1 h-7 w-7 rounded-bl-lg border-b-4 border-l-4 border-blue-400" />
-
-            <div className="absolute -bottom-1 -right-1 h-7 w-7 rounded-br-lg border-b-4 border-r-4 border-blue-400" />
+  return <section className="space-y-3">
+    <button ref={openerRef} type="button" onClick={() => void start()} className="flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--app-accent)] px-4 py-3.5 font-semibold text-white">
+      {mode === 'qr' ? <ScanLine size={20}/> : <Barcode size={20}/>}
+      {mode === 'qr' ? 'Abrir lector QR' : `Escanear ${label}`}
+    </button>
+    {lastCode && <div role="status" className="flex gap-2 rounded-xl border border-emerald-300 p-3 text-sm"><CheckCircle2 size={18}/><span className="break-all">Código reconocido: {lastCode}</span></div>}
+    {error && !open && <p role="alert" className="text-sm text-red-600">{error}</p>}
+    {open && typeof document !== 'undefined' && createPortal(
+      <div className="fixed inset-0 z-[300] flex flex-col bg-[#090c13] text-white" role="dialog" aria-modal="true" aria-label={`Lector ${mode === 'qr' ? 'QR' : 'de barras'}`}>
+        <header className="flex shrink-0 items-center justify-between border-b border-white/20 p-4" style={{ paddingTop: 'max(12px, env(safe-area-inset-top))' }}>
+          <div><h2 className="font-bold">{mode === 'qr' ? 'Lector QR' : 'Lector de barras'}</h2><p className="text-xs text-white/70">{mode === 'qr' ? 'Centra el QR en el cuadro' : 'Coloca UNA sola fila de barras en el marco horizontal'}</p></div>
+          <button ref={closeRef} type="button" onClick={close} aria-label="Cerrar lector" className="rounded-xl border border-white/30 p-3"><X size={22}/></button>
+        </header>
+        <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black">
+          <video ref={videoRef} autoPlay muted playsInline className="h-full w-full object-contain" />
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-5">
+            <div className={mode === 'qr'
+              ? 'relative aspect-square w-[min(78vw,360px)] rounded-3xl border-[3px] border-emerald-400 shadow-[0_0_0_100vmax_rgba(0,0,0,.24)]'
+              : 'relative h-[clamp(100px,21dvh,175px)] w-[min(92vw,860px)] rounded-2xl border-[3px] border-emerald-400 shadow-[0_0_0_100vmax_rgba(0,0,0,.24)]'}>
+              {mode === 'barcode' && <div className="absolute left-2 right-2 top-1/2 h-[2px] bg-red-400/80"/>}
+            </div>
           </div>
+          {loading && <span role="status" className="absolute bottom-6 flex items-center gap-2 rounded-xl bg-black/80 px-4 py-3 text-sm"><LoaderCircle size={19} className="animate-spin"/>Activando lector...</span>}
+          {error && <p role="alert" className="absolute bottom-5 left-5 right-5 rounded-xl bg-red-900/90 p-3 text-sm">{error}</p>}
         </div>
-
-        <div className="absolute bottom-3 left-0 right-0 flex justify-center">
-          <span className="rounded-full bg-black/65 px-4 py-2 text-xs text-white">
-            <ScanLine
-              size={15}
-              className="mr-2 inline-block"
-            />
-            Enfoca el código
-          </span>
-        </div>
-      </div>
-
-      {active && (
-        <div className="space-y-1 text-center">
-          <p className="text-sm text-slate-600">
-            Mantén el código horizontal, completo y
-            bien enfocado.
-          </p>
-
-          <p className="text-xs text-slate-400">
-            Para SUNMI, enfoca una sola fila de barras.
-          </p>
-        </div>
-      )}
-
-      {cameraInfo && active && (
-        <p className="text-center text-xs text-green-700">
-          {cameraInfo}
-        </p>
-      )}
-
-      {lastCode && (
-        <div
-          role="status"
-          className="flex items-start gap-2 rounded-xl border border-green-200 bg-green-50 p-4 text-green-800"
-        >
-          <CheckCircle2
-            size={20}
-            className="mt-0.5 shrink-0"
-          />
-
-          <div className="min-w-0">
-            <p className="text-sm font-semibold">
-              Código reconocido
-            </p>
-
-            <p className="mt-1 break-all font-mono text-sm">
-              {lastCode}
-            </p>
-          </div>
-        </div>
-      )}
-
-      {error && (
-        <div
-          role="alert"
-          className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700"
-        >
-          <p className="font-semibold">
-            No se pudo utilizar el escáner
-          </p>
-
-          <p className="mt-2 break-words">{error}</p>
-
-          <p className="mt-2 text-xs">
-            Revisa los permisos de la cámara en Safari
-            o Chrome e inténtalo nuevamente.
-          </p>
-        </div>
-      )}
-    </section>
-  );
+        <footer className="shrink-0 space-y-3 border-t border-white/20 bg-[#111827] p-4" style={{ paddingBottom: 'max(16px, env(safe-area-inset-bottom))' }}>
+          <p className="text-center text-xs text-white/75">{mode === 'barcode' ? 'Mantén la fila horizontal, acercándola poco a poco hasta lograr enfoque.' : 'Mantén el QR completo, iluminado y sin reflejos.'}</p>
+          <button type="button" onClick={close} className="flex w-full items-center justify-center gap-2 rounded-xl border border-white/40 px-4 py-3 font-semibold"><CameraOff size={18}/>Cerrar cámara</button>
+        </footer>
+      </div>, document.body,
+    )}
+  </section>;
 }

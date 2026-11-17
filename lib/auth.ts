@@ -3,17 +3,12 @@ import 'server-only';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { SignJWT, jwtVerify } from 'jose';
-
 import { prisma } from '@/lib/prisma';
 import { canAccessPosControl, isAllowedOrigin } from '@/lib/security/auth-policy';
 
-// Se mantiene el nombre de cookie actual para no romper login/logout.
 export const SESSION_COOKIE = 'pos_session';
-
 const key = process.env.SESSION_SECRET;
-if (!key || key.length < 32) {
-  throw new Error('SESSION_SECRET debe tener al menos 32 caracteres');
-}
+if (!key || key.length < 32) throw new Error('SESSION_SECRET debe tener al menos 32 caracteres');
 const secret = new TextEncoder().encode(key);
 
 export async function createSession(userId: string) {
@@ -31,25 +26,17 @@ export async function getCurrentUser() {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
   if (!token) return null;
-
   try {
     const { payload } = await jwtVerify(token, secret, {
-      algorithms: ['HS256'],
-      issuer: 'pos-inventory',
-      audience: 'pos-inventory-web',
+      algorithms: ['HS256'], issuer: 'pos-inventory', audience: 'pos-inventory-web',
     });
     if (!payload.sub) return null;
-
-    // La sesión se valida contra la base en cada acceso; cuentas
-    // desactivadas o sin el rol ADMIN dejan de tener acceso.
     const user = await prisma.user.findFirst({
       where: { id: payload.sub, isActive: true, role: 'ADMIN' },
       select: { id: true, name: true, email: true, role: true },
     });
     return user && canAccessPosControl(user.role) ? user : null;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 export async function requireUser() {
@@ -57,12 +44,5 @@ export async function requireUser() {
   if (!user) redirect('/login');
   return user;
 }
-
-// Se conserva esta función para compatibilidad con las API actuales.
-export function canRegisterDevice(role: string) {
-  return canAccessPosControl(role);
-}
-
-export function isSameOrigin(request: Request) {
-  return isAllowedOrigin(request.headers.get('origin'), request.url);
-}
+export function canRegisterDevice(role: string) { return canAccessPosControl(role); }
+export function isSameOrigin(request: Request) { return isAllowedOrigin(request.headers.get('origin'), request.url); }
